@@ -1,0 +1,146 @@
+version: '3'
+
+vars:
+  BINARY_NAME: mcpproxy
+  BUILD_DIR: ./bin
+  MAIN_PATH: ./cmd/proxy
+  COVERAGE_FILE: coverage.out
+
+tasks:
+  default:
+    desc: Run tests and build (default target)
+    deps: [test, build]
+
+  build:
+    desc: Build the proxy server binary
+    cmds:
+      - echo "Building {{.BINARY_NAME}}..."
+      - mkdir -p {{.BUILD_DIR}}
+      - go build -o {{.BUILD_DIR}}/{{.BINARY_NAME}} {{.MAIN_PATH}}
+      - echo "✓ Build complete{{":"}} {{.BUILD_DIR}}/{{.BINARY_NAME}}"
+    sources:
+      - "**/*.go"
+      - go.mod
+      - go.sum
+    generates:
+      - "{{.BUILD_DIR}}/{{.BINARY_NAME}}"
+
+  test:
+    desc: Run all tests
+    cmds:
+      - echo "Running tests..."
+      - go test ./... -v
+
+  coverage:
+    desc: Run tests with coverage report
+    cmds:
+      - echo "Running tests with coverage..."
+      - go test ./... -coverprofile={{.COVERAGE_FILE}}
+      - go tool cover -html={{.COVERAGE_FILE}}
+      - echo "✓ Coverage report generated{{":"}} {{.COVERAGE_FILE}}"
+    generates:
+      - "{{.COVERAGE_FILE}}"
+
+  clean:
+    desc: Remove build artifacts
+    cmds:
+      - echo "Cleaning..."
+      - rm -rf {{.BUILD_DIR}}
+      - rm -f {{.COVERAGE_FILE}}
+      - echo "✓ Clean complete"
+
+  run:
+    desc: Build and run the proxy server (development mode)
+    deps: [build]
+    cmds:
+      - echo "Starting MCP proxy server..."
+      - "{{.BUILD_DIR}}/{{.BINARY_NAME}}"
+
+  install:
+    desc: Download and verify dependencies
+    cmds:
+      - echo "Installing dependencies..."
+      - go mod download
+      - go mod verify
+      - echo "✓ Dependencies installed"
+
+  lint:
+    desc: Run golangci-lint
+    cmds:
+      - echo "Running linter..."
+      - golangci-lint run ./...
+      - echo "✓ Lint complete"
+
+  fmt:
+    desc: Format code with gofmt and goimports
+    cmds:
+      - echo "Formatting code..."
+      - go fmt ./...
+      - goimports -w .
+      - echo "✓ Format complete"
+
+  gen-keys:
+    desc: Generate new encryption keys
+    cmds:
+      - echo "Generating encryption keys..."
+      - go run scripts/gen-keys/main.go
+
+  rotate-keys:
+    desc: Rotate encryption keys
+    cmds:
+      - echo "Rotating encryption keys..."
+      - go run scripts/rotate-keys/main.go
+
+  build-all:
+    desc: Build for multiple platforms
+    cmds:
+      - echo "Building for multiple platforms..."
+      - mkdir -p {{.BUILD_DIR}}
+      - task: build-linux-amd64
+      - task: build-linux-arm64
+      - task: build-darwin-amd64
+      - task: build-darwin-arm64
+      - task: build-windows-amd64
+      - echo "✓ Multi-platform build complete"
+
+  build-linux-amd64:
+    internal: true
+    cmds:
+      - GOOS=linux GOARCH=amd64 go build -o {{.BUILD_DIR}}/{{.BINARY_NAME}}-linux-amd64 {{.MAIN_PATH}}
+
+  build-linux-arm64:
+    internal: true
+    cmds:
+      - GOOS=linux GOARCH=arm64 go build -o {{.BUILD_DIR}}/{{.BINARY_NAME}}-linux-arm64 {{.MAIN_PATH}}
+
+  build-darwin-amd64:
+    internal: true
+    cmds:
+      - GOOS=darwin GOARCH=amd64 go build -o {{.BUILD_DIR}}/{{.BINARY_NAME}}-darwin-amd64 {{.MAIN_PATH}}
+
+  build-darwin-arm64:
+    internal: true
+    cmds:
+      - GOOS=darwin GOARCH=arm64 go build -o {{.BUILD_DIR}}/{{.BINARY_NAME}}-darwin-arm64 {{.MAIN_PATH}}
+
+  build-windows-amd64:
+    internal: true
+    cmds:
+      - GOOS=windows GOARCH=amd64 go build -o {{.BUILD_DIR}}/{{.BINARY_NAME}}-windows-amd64.exe {{.MAIN_PATH}}
+
+  security:
+    desc: Run security checks with gosec
+    cmds:
+      - echo "Running security checks..."
+      - gosec ./...
+      - echo "✓ Security check complete"
+
+  help:
+    desc: Display help message
+    cmds:
+      - echo "MCP Proxy Server - Task Commands"
+      - echo ""
+      - echo "Usage{{":"}} task [target]"
+      - echo ""
+      - echo "Available tasks{{":"}}"
+      - task --list
