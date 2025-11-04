@@ -18,8 +18,17 @@ type Config struct {
 	// Proxy identity
 	ProxyURL string // https://proxy.example.com
 
+	// Resource metadata URL for WWW-Authenticate header
+	ResourceMetadataURL string // https://proxy.example.com/.well-known/oauth-protected-resource
+
 	// Upstream MCP server
 	UpstreamMCPURL string // https://mcp.example.com
+
+	// OAuth Client Credentials (proxy acts as OAuth client)
+	OAuthClientID     string // Client ID for authenticating with IDP
+	OAuthClientSecret string // Client secret for authenticating with IDP
+	OAuthTokenURL     string // Token endpoint of the IDP
+	OAuthAuthURL      string // Authorization endpoint of the IDP
 
 	// Token settings
 	OpaqueTokenTTL time.Duration // 15 minutes
@@ -64,6 +73,16 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("KEY_STORE_PATH is required when KEY_STORE_TYPE is file")
 	}
 
+	// Validate OAuth credentials if token URL is provided
+	if c.OAuthTokenURL != "" {
+		if c.OAuthClientID == "" {
+			return fmt.Errorf("OAUTH_CLIENT_ID is required when OAUTH_TOKEN_URL is configured")
+		}
+		if c.OAuthClientSecret == "" {
+			return fmt.Errorf("OAUTH_CLIENT_SECRET is required when OAUTH_TOKEN_URL is configured")
+		}
+	}
+
 	return nil
 }
 
@@ -75,8 +94,14 @@ func LoadFromEnv() (*Config, error) {
 		TLSKeyFile:      getEnv("TLS_KEY_FILE", ""),
 		ShutdownTimeout: getDurationEnv("SHUTDOWN_TIMEOUT", 30*time.Second),
 
-		ProxyURL:       getEnv("PROXY_URL", ""),
-		UpstreamMCPURL: getEnv("UPSTREAM_MCP_URL", ""),
+		ProxyURL:            getEnv("PROXY_URL", ""),
+		ResourceMetadataURL: getEnv("RESOURCE_METADATA_URL", ""),
+		UpstreamMCPURL:      getEnv("UPSTREAM_MCP_URL", ""),
+
+		OAuthClientID:     getEnv("OAUTH_CLIENT_ID", ""),
+		OAuthClientSecret: getEnv("OAUTH_CLIENT_SECRET", ""),
+		OAuthTokenURL:     getEnv("OAUTH_TOKEN_URL", ""),
+		OAuthAuthURL:      getEnv("OAUTH_AUTH_URL", ""),
 
 		OpaqueTokenTTL: getDurationEnv("OPAQUE_TOKEN_TTL", 15*time.Minute),
 
@@ -89,6 +114,11 @@ func LoadFromEnv() (*Config, error) {
 
 		LogLevel:  getEnv("LOG_LEVEL", "info"),
 		LogFormat: getEnv("LOG_FORMAT", "json"),
+	}
+
+	// Set default resource metadata URL if not provided
+	if cfg.ResourceMetadataURL == "" && cfg.ProxyURL != "" {
+		cfg.ResourceMetadataURL = cfg.ProxyURL + "/.well-known/oauth-protected-resource"
 	}
 
 	return cfg, nil

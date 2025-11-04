@@ -317,3 +317,166 @@ func createTestCryptoService() (crypto.CryptoService, error) {
 
 	return crypto.NewAESGCMService(cfg)
 }
+
+func TestOpaqueTokenService_EncryptedRealTokens(t *testing.T) {
+	cfg := &config.Config{
+		ProxyURL:       "https://proxy.example.com",
+		OpaqueTokenTTL: 15 * time.Minute,
+	}
+
+	cryptoService, err := createTestCryptoService()
+	if err != nil {
+		t.Fatalf("failed to create crypto service: %v", err)
+	}
+
+	service := NewOpaqueTokenService(cryptoService, cfg)
+	ctx := context.Background()
+
+	// Create payload with real tokens
+	realAccessToken := "real-access-token-from-idp-xyz123"
+	realRefreshToken := "real-refresh-token-from-idp-abc456"
+
+	payload := &OpaqueTokenPayload{
+		RTID:         "test-rtid",
+		Scope:        []string{"mcp:read", "mcp:write"},
+		AccessToken:  realAccessToken,
+		RefreshToken: realRefreshToken,
+	}
+
+	// Create opaque token
+	opaqueToken, err := service.Create(ctx, payload)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	if opaqueToken == "" {
+		t.Fatal("Create() returned empty token")
+	}
+
+	// Validate and decrypt opaque token
+	validated, err := service.Validate(ctx, opaqueToken)
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+
+	// Verify decrypted tokens match original
+	if validated.AccessToken != realAccessToken {
+		t.Errorf("Decrypted access_token = %v, want %v", validated.AccessToken, realAccessToken)
+	}
+
+	if validated.RefreshToken != realRefreshToken {
+		t.Errorf("Decrypted refresh_token = %v, want %v", validated.RefreshToken, realRefreshToken)
+	}
+
+	// Verify the token in transit doesn't contain plaintext tokens
+	// The opaque token should not contain the real tokens in plaintext
+	if containsString(opaqueToken, realAccessToken) {
+		t.Error("Opaque token contains plaintext access_token (security violation)")
+	}
+
+	if containsString(opaqueToken, realRefreshToken) {
+		t.Error("Opaque token contains plaintext refresh_token (security violation)")
+	}
+}
+
+func TestOpaqueTokenService_WithoutRealTokens(t *testing.T) {
+	cfg := &config.Config{
+		ProxyURL:       "https://proxy.example.com",
+		OpaqueTokenTTL: 15 * time.Minute,
+	}
+
+	cryptoService, err := createTestCryptoService()
+	if err != nil {
+		t.Fatalf("failed to create crypto service: %v", err)
+	}
+
+	service := NewOpaqueTokenService(cryptoService, cfg)
+	ctx := context.Background()
+
+	// Create payload without real tokens (backward compatibility)
+	payload := &OpaqueTokenPayload{
+		RTID:  "test-rtid",
+		Scope: []string{"mcp:read"},
+	}
+
+	// Create opaque token
+	opaqueToken, err := service.Create(ctx, payload)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	// Validate
+	validated, err := service.Validate(ctx, opaqueToken)
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+
+	// Verify tokens are empty
+	if validated.AccessToken != "" {
+		t.Errorf("Expected empty access_token, got %v", validated.AccessToken)
+	}
+
+	if validated.RefreshToken != "" {
+		t.Errorf("Expected empty refresh_token, got %v", validated.RefreshToken)
+	}
+}
+
+func TestOpaqueTokenService_PartialRealTokens(t *testing.T) {
+	cfg := &config.Config{
+		ProxyURL:       "https://proxy.example.com",
+		OpaqueTokenTTL: 15 * time.Minute,
+	}
+
+	cryptoService, err := createTestCryptoService()
+	if err != nil {
+		t.Fatalf("failed to create crypto service: %v", err)
+	}
+
+	service := NewOpaqueTokenService(cryptoService, cfg)
+	ctx := context.Background()
+
+	// Create payload with only access token
+	realAccessToken := "real-access-token-only"
+
+	payload := &OpaqueTokenPayload{
+		RTID:        "test-rtid",
+		Scope:       []string{"mcp:read"},
+		AccessToken: realAccessToken,
+		// No RefreshToken
+	}
+
+	// Create opaque token
+	opaqueToken, err := service.Create(ctx, payload)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	// Validate
+	validated, err := service.Validate(ctx, opaqueToken)
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+
+	// Verify only access token is present
+	if validated.AccessToken != realAccessToken {
+		t.Errorf("Decrypted access_token = %v, want %v", validated.AccessToken, realAccessToken)
+	}
+
+	if validated.RefreshToken != "" {
+		t.Errorf("Expected empty refresh_token, got %v", validated.RefreshToken)
+	}
+}
+
+// Helper function to check if a string contains a substring
+func containsString(s, substr string) bool {
+	return len(substr) > 0 && len(s) > 0 && (s == substr || len(s) > len(substr) && (s[:len(substr)] == substr || s[len(s)-len(substr):] == substr || containsInMiddle(s, substr)))
+}
+
+func containsInMiddle(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}

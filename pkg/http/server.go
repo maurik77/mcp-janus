@@ -1,6 +1,7 @@
 package http
 
 import (
+	"fmt"
 	"log/slog"
 	"net/http"
 
@@ -203,7 +204,16 @@ func (s *Server) handleMCPProxy(w http.ResponseWriter, r *http.Request) {
 
 // sendUnauthorized sends a 401 response with WWW-Authenticate header
 func (s *Server) sendUnauthorized(w http.ResponseWriter, message string) {
-	w.Header().Set("WWW-Authenticate", `Bearer realm="`+s.cfg.ProxyURL+`", error="invalid_token"`)
+	// RFC 6750 - include realm and resource metadata URL
+	resourceMetadataURL := s.cfg.ResourceMetadataURL
+	if resourceMetadataURL == "" {
+		resourceMetadataURL = s.cfg.ProxyURL + "/.well-known/oauth-protected-resource"
+	}
+
+	wwwAuth := fmt.Sprintf(`Bearer realm="%s", error="invalid_token", error_description="%s", resource_metadata_url="%s"`,
+		s.cfg.ProxyURL, message, resourceMetadataURL)
+
+	w.Header().Set("WWW-Authenticate", wwwAuth)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusUnauthorized)
 	writeJSON(w, map[string]string{
