@@ -1,6 +1,20 @@
-# MCP Proxy Server
+# MCP Janus Proxy Server
 
 Un **server proxy MCP (Model Context Protocol) conforme a OAuth 2.1** sicuro scritto in Go che si posiziona tra i client MCP e i server MCP protetti, gestendo tutte le comunicazioni con robusti controlli di sicurezza.
+
+## 🏛️ Perché Janus?
+
+**Giano** (Janus), l'antico dio romano delle porte, dei cancelli, delle transizioni e dei passaggi, sta eterno con due volti—uno che guarda al passato, l'altro al futuro. Guardiano delle soglie e degli inizi, Giano vigila su tutto ciò che entra ed esce, presiedendo al cambiamento e alla dualità.
+
+Questo proxy incarna lo spirito di Giano:
+
+- **🚪 Guardiano dei Passaggi**: Come Giano sulla soglia, questo proxy monta la guardia tra client e server, controllando il passaggio con vigilanza incrollabile
+- **👁️ Visione Bifronte**: Un volto valida le richieste in arrivo dai client, l'altro protegge la comunicazione con i server upstream—vedendo entrambi i mondi simultaneamente
+- **🔄 Maestro delle Transizioni**: Trasforma i token dei client in credenziali sicure, mediando il passaggio tra domini di fiducia
+- **⚖️ Custode dei Confini**: Fa rispettare il confine sacro tra regni pubblici e protetti, permettendo solo ai degni di passare
+- **🌅 Araldo dei Nuovi Inizi**: Ogni richiesta è un nuovo inizio, ogni token un nuovo avvio, gestito con cerimonia crittografica
+
+Proprio come gli antichi Romani invocavano Giano all'inizio di ogni impresa, questo proxy avvia ogni connessione MCP sicura, ergendosi come sentinella eterna al passaggio tra i mondi.
 
 ## 🎯 Obiettivo del Progetto
 

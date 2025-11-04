@@ -1,6 +1,20 @@
-# MCP Proxy Server
+# MCP Janus Proxy Server
 
 A secure **OAuth 2.1-compliant MCP (Model Context Protocol) Proxy Server** written in Go that sits between MCP clients and protected MCP servers, managing all communication with robust security controls.
+
+## 🏛️ Why Janus?
+
+**Janus**, the ancient Roman god of doors, gates, transitions, and passages, stands eternal with two faces—one gazing into the past, the other into the future. Guardian of thresholds and beginnings, Janus watches over all that enters and exits, presiding over change and duality.
+
+This proxy embodies the spirit of Janus:
+
+- **🚪 Guardian of Gateways**: Like Janus at the threshold, this proxy stands watch between client and server, controlling passage with unwavering vigilance
+- **👁️ Two-Faced Vision**: One face validates incoming requests from clients, the other secures communication with upstream servers—seeing both worlds simultaneously
+- **🔄 Master of Transitions**: Transforms client tokens into secure credentials, mediating the passage between trust domains
+- **⚖️ Keeper of Boundaries**: Enforces the sacred boundary between public and protected realms, allowing only the worthy to pass
+- **🌅 Herald of New Beginnings**: Each request is a new beginning, each token a fresh start, managed with cryptographic ceremony
+
+Just as ancient Romans invoked Janus at the start of any endeavor, this proxy initiates every secure MCP connection, standing as the eternal sentinel at the gateway between worlds.
 
 ## 🎯 Project Goal
 
