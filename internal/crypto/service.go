@@ -1,5 +1,4 @@
 package crypto
-package crypto
 
 import (
 	"context"

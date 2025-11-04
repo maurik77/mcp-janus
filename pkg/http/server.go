@@ -1,5 +1,4 @@
 package http
-package http
 
 import (
 	"log/slog"
@@ -57,7 +56,7 @@ func (s *Server) registerRoutes() {
 
 // Handler returns the HTTP handler with middleware
 func (s *Server) Handler() http.Handler {
-	handler := s.mux
+	var handler http.Handler = s.mux
 
 	// Apply middleware (in reverse order of execution)
 	handler = s.middlewareLogging(handler)

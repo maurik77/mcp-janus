@@ -63,12 +63,12 @@ fmt:
 # Generate encryption keys
 gen-keys:
 	@echo "Generating encryption keys..."
-	@go run scripts/gen-keys.go
+	@go run scripts/gen-keys/main.go
 
 # Rotate encryption keys
 rotate-keys:
 	@echo "Rotating encryption keys..."
-	@go run scripts/rotate-keys.go
+	@go run scripts/rotate-keys/main.go
 
 # Build for multiple platforms
 build-all:

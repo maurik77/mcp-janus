@@ -1,5 +1,4 @@
 package tokens
-package tokens
 
 import (
 	"context"

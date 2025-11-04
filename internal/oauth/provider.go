@@ -1,5 +1,4 @@
 package oauth
-package oauth
 
 import (
 	"context"

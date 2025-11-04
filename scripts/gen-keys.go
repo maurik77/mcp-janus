@@ -1,4 +1,3 @@
-package scripts
 package main
 
 import (

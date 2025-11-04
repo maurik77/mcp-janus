@@ -265,8 +265,10 @@ mcpproxy/
 │   ├── mcp-auth-notes.md        # MCP spec summary
 │   └── design.md                # Design document
 ├── scripts/
-│   ├── gen-keys.go              # Key generation utility
-│   └── rotate-keys.go           # Key rotation utility
+│   ├── gen-keys/
+│   │   └── main.go              # Key generation utility
+│   └── rotate-keys/
+│       └── main.go              # Key rotation utility
 ├── go.mod
 ├── go.sum
 ├── README.md                    # This file
@@ -297,12 +299,16 @@ This project follows idiomatic Go conventions:
 
 Generate new encryption key:
 ```bash
-go run scripts/gen-keys.go
+go run scripts/gen-keys/main.go
+# or using Makefile
+make gen-keys
 ```
 
 Rotate keys:
 ```bash
-go run scripts/rotate-keys.go
+go run scripts/rotate-keys/main.go
+# or using Makefile
+make rotate-keys
 ```
 
 ## 🛡️ Threat Model
@@ -369,7 +375,8 @@ For issues and questions:
 - [x] Graceful shutdown
 - [x] Comprehensive tests (>80% coverage)
 - [x] Documentation (README, SECURITY, design)
+- [x] Key generation scripts
+- [x] Key rotation scripts
 - [ ] Rate limiting implementation
 - [ ] Complete OAuth flow handlers
-- [ ] Key generation scripts
 - [ ] OpenAPI specification

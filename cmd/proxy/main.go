@@ -1,9 +1,7 @@
-package proxy
 package main
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"os"

@@ -1,5 +1,4 @@
 package mcp
-package mcp
 
 import (
 	"bytes"
