@@ -52,6 +52,9 @@ tasks:
   run:
     desc: Build and run the proxy server (development mode)
     deps: [build]
+    env:
+      PROXY_URL: "http://localhost:8080"
+      UPSTREAM_MCP_URL: "http://localhost:8090"
     cmds:
       - echo "Starting MCP proxy server..."
       - "{{.BUILD_DIR}}/{{.BINARY_NAME}}"
