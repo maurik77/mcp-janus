@@ -1,0 +1,390 @@
+###
+# MCP Janus Proxy Server - REST API Tests
+# Use REST Client extension in VS Code to execute these requests
+###
+
+@baseUrl = http://localhost:8443
+@httpsUrl = https://localhost:8443
+@proxyUrl = {{baseUrl}}
+
+### Variables for OAuth flow
+@clientId = test-client-123
+@redirectUri = http://localhost:8080/callback
+@state = random-state-string-123
+@codeVerifier = dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk
+@authCode = test-auth-code-456
+@accessToken = test-opaque-token.base64nonce.base64tag
+@refreshToken = test-refresh-token-789
+
+###############################################################################
+# Health & Metadata Endpoints
+###############################################################################
+
+### Health Check
+GET {{proxyUrl}}/health
+Accept: application/json
+
+###
+
+### Protected Resource Metadata (RFC 9728)
+GET {{proxyUrl}}/.well-known/oauth-protected-resource
+Accept: application/json
+
+###
+
+###############################################################################
+# OAuth Authorization Flow
+###############################################################################
+
+### Step 1: Initiate Authorization (Authorization Code + PKCE)
+POST {{proxyUrl}}/auth/authorize
+Content-Type: application/x-www-form-urlencoded
+
+response_type=code
+&client_id={{clientId}}
+&redirect_uri={{redirectUri}}
+&state={{state}}
+&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM
+&code_challenge_method=S256
+&scope=mcp:read mcp:write
+&resource=https://mcp.example.com
+
+###
+
+### Step 2: OAuth Callback (simulated - normally called by auth server)
+GET {{proxyUrl}}/auth/callback?code={{authCode}}&state={{state}}
+
+###
+
+### Step 3: Token Exchange
+POST {{proxyUrl}}/token
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=authorization_code
+&code={{authCode}}
+&redirect_uri={{redirectUri}}
+&client_id={{clientId}}
+&code_verifier={{codeVerifier}}
+
+###
+
+### Token Exchange - Refresh Token
+POST {{proxyUrl}}/token
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=refresh_token
+&refresh_token={{refreshToken}}
+&client_id={{clientId}}
+
+###
+
+### Token Exchange - Client Credentials (service-to-service)
+POST {{proxyUrl}}/token
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=client_credentials
+&client_id={{clientId}}
+&client_secret=test-secret
+&scope=mcp:read mcp:write
+
+###
+
+###############################################################################
+# MCP Proxy Requests (Authenticated)
+###############################################################################
+
+### MCP Request - List Tools (with valid token)
+GET {{proxyUrl}}/mcp/tools
+Authorization: Bearer {{accessToken}}
+Accept: application/json
+
+###
+
+### MCP Request - Call Tool (with valid token)
+POST {{proxyUrl}}/mcp/tools/execute
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "name": "example-tool",
+  "arguments": {
+    "param1": "value1",
+    "param2": "value2"
+  }
+}
+
+###
+
+### MCP Request - List Resources
+GET {{proxyUrl}}/mcp/resources
+Authorization: Bearer {{accessToken}}
+Accept: application/json
+
+###
+
+### MCP Request - Get Resource
+GET {{proxyUrl}}/mcp/resources/example-resource
+Authorization: Bearer {{accessToken}}
+Accept: application/json
+
+###
+
+### MCP Request - List Prompts
+GET {{proxyUrl}}/mcp/prompts
+Authorization: Bearer {{accessToken}}
+Accept: application/json
+
+###
+
+### MCP Request - Execute Prompt
+POST {{proxyUrl}}/mcp/prompts/execute
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "name": "example-prompt",
+  "arguments": {
+    "context": "test context"
+  }
+}
+
+###
+
+###############################################################################
+# Error Cases & Security Tests
+###############################################################################
+
+### MCP Request - No Authorization Header (should fail with 401)
+GET {{proxyUrl}}/mcp/tools
+Accept: application/json
+
+###
+
+### MCP Request - Invalid Token (should fail with 401)
+GET {{proxyUrl}}/mcp/tools
+Authorization: Bearer invalid-token-format
+Accept: application/json
+
+###
+
+### MCP Request - Malformed Token (should fail with 401)
+GET {{proxyUrl}}/mcp/tools
+Authorization: Bearer malformed.token.here
+Accept: application/json
+
+###
+
+### MCP Request - Expired Token (should fail with 401)
+GET {{proxyUrl}}/mcp/tools
+Authorization: Bearer expired.token.abc123.def456
+Accept: application/json
+
+###
+
+### Token Exchange - Missing Parameters (should fail with 400)
+POST {{proxyUrl}}/token
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=authorization_code
+
+###
+
+### Token Exchange - Invalid Grant Type (should fail with 400)
+POST {{proxyUrl}}/token
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=invalid_grant
+&code={{authCode}}
+
+###
+
+### Authorization - Missing PKCE (should fail with 400)
+POST {{proxyUrl}}/auth/authorize
+Content-Type: application/x-www-form-urlencoded
+
+response_type=code
+&client_id={{clientId}}
+&redirect_uri={{redirectUri}}
+&state={{state}}
+
+###
+
+### Authorization - Invalid Code Challenge Method (should fail with 400)
+POST {{proxyUrl}}/auth/authorize
+Content-Type: application/x-www-form-urlencoded
+
+response_type=code
+&client_id={{clientId}}
+&redirect_uri={{redirectUri}}
+&state={{state}}
+&code_challenge=test-challenge
+&code_challenge_method=plain
+
+###
+
+###############################################################################
+# HTTPS-Specific Tests (requires TLS certificates)
+###############################################################################
+
+### Health Check (HTTPS)
+# @name healthHttps
+GET {{httpsUrl}}/health
+Accept: application/json
+
+###
+
+### Protected Resource Metadata (HTTPS)
+GET {{httpsUrl}}/.well-known/oauth-protected-resource
+Accept: application/json
+
+###
+
+###############################################################################
+# Rate Limiting Tests
+###############################################################################
+
+### Rapid Fire Requests (to test rate limiting)
+# Execute this multiple times quickly to trigger rate limiting
+GET {{proxyUrl}}/health
+
+###
+
+###############################################################################
+# Token Introspection / Validation (if implemented)
+###############################################################################
+
+### Token Introspection
+POST {{proxyUrl}}/token/introspect
+Content-Type: application/x-www-form-urlencoded
+Authorization: Bearer {{accessToken}}
+
+token={{accessToken}}
+
+###
+
+### Token Revocation
+POST {{proxyUrl}}/token/revoke
+Content-Type: application/x-www-form-urlencoded
+Authorization: Bearer {{accessToken}}
+
+token={{accessToken}}
+&token_type_hint=access_token
+
+###
+
+### Refresh Token Revocation
+POST {{proxyUrl}}/token/revoke
+Content-Type: application/x-www-form-urlencoded
+Authorization: Bearer {{accessToken}}
+
+token={{refreshToken}}
+&token_type_hint=refresh_token
+
+###
+
+###############################################################################
+# Dynamic Client Registration (RFC 7591)
+###############################################################################
+
+### Register New Client
+POST {{proxyUrl}}/register
+Content-Type: application/json
+
+{
+  "client_name": "Test MCP Client",
+  "redirect_uris": [
+    "http://localhost:8080/callback",
+    "http://localhost:8080/oauth/callback"
+  ],
+  "token_endpoint_auth_method": "none",
+  "grant_types": [
+    "authorization_code",
+    "refresh_token"
+  ],
+  "response_types": [
+    "code"
+  ],
+  "scope": "mcp:read mcp:write"
+}
+
+###
+
+###############################################################################
+# Authorization Server Metadata (RFC 8414)
+###############################################################################
+
+### Get Authorization Server Metadata
+GET {{proxyUrl}}/.well-known/oauth-authorization-server
+Accept: application/json
+
+###
+
+###############################################################################
+# Advanced MCP Operations
+###############################################################################
+
+### MCP - Initialize Session
+POST {{proxyUrl}}/mcp/initialize
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "protocolVersion": "2024-11-05",
+  "capabilities": {
+    "roots": {
+      "listChanged": true
+    },
+    "sampling": {}
+  },
+  "clientInfo": {
+    "name": "test-client",
+    "version": "1.0.0"
+  }
+}
+
+###
+
+### MCP - List Server Capabilities
+GET {{proxyUrl}}/mcp/capabilities
+Authorization: Bearer {{accessToken}}
+Accept: application/json
+
+###
+
+### MCP - Subscribe to Resource Updates
+POST {{proxyUrl}}/mcp/resources/subscribe
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "uri": "resource://example"
+}
+
+###
+
+### MCP - Complete Request (with different resource indicator)
+GET {{proxyUrl}}/mcp/complete
+Authorization: Bearer {{accessToken}}
+Accept: application/json
+Resource: https://different-mcp-server.example.com
+
+###
+
+###############################################################################
+# Notes
+###############################################################################
+
+# To use these tests:
+# 1. Install REST Client extension in VS Code
+# 2. Start the MCP Janus Proxy: `make run` or `task run`
+# 3. Update variables at the top with real values from your OAuth flow
+# 4. Click "Send Request" above any ### separator
+# 5. For HTTPS tests, ensure TLS certificates are properly configured
+#
+# Expected Behaviors:
+# - Health check should return {"status":"ok"}
+# - Metadata endpoints should return JSON with proxy configuration
+# - OAuth flows should follow RFC 6749, 7636, and OAuth 2.1
+# - MCP requests without valid tokens should return 401
+# - Rate limiting should return 429 after threshold is exceeded
+# - All responses should include proper CORS and security headers
