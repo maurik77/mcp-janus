@@ -2,8 +2,10 @@ version: '3'
 
 vars:
   BINARY_NAME: mcpproxy
+  TEST_SERVER_NAME: mcpserver
   BUILD_DIR: ./bin
   MAIN_PATH: ./cmd/proxy
+  TEST_SERVER_PATH: ./cmd/mcpserver
   COVERAGE_FILE: coverage.out
 
 tasks:
@@ -24,6 +26,52 @@ tasks:
       - go.sum
     generates:
       - "{{.BUILD_DIR}}/{{.BINARY_NAME}}"
+
+  build-testserver:
+    desc: Build the MCP test server binary
+    cmds:
+      - echo "Building {{.TEST_SERVER_NAME}}..."
+      - mkdir -p {{.BUILD_DIR}}
+      - go build -o {{.BUILD_DIR}}/{{.TEST_SERVER_NAME}} {{.TEST_SERVER_PATH}}
+      - echo "✓ Build complete{{":"}} {{.BUILD_DIR}}/{{.TEST_SERVER_NAME}}"
+    sources:
+      - "cmd/mcpserver/**/*.go"
+      - go.mod
+      - go.sum
+    generates:
+      - "{{.BUILD_DIR}}/{{.TEST_SERVER_NAME}}"
+
+  run-testserver:
+    desc: Build and run the MCP test server
+    deps: [build-testserver]
+    cmds:
+      - echo "Starting MCP test server on port 8081..."
+      - "{{.BUILD_DIR}}/{{.TEST_SERVER_NAME}}"
+
+  test-testserver:
+    desc: Run tests against the MCP test server
+    deps: [build-testserver]
+    cmds:
+      - echo "Testing MCP server..."
+      - ./scripts/test-mcpserver.sh
+
+  start-all:
+    desc: Start both MCP test server and proxy
+    cmds:
+      - echo "Starting test environment..."
+      - ./scripts/start-servers.sh
+
+  stop-all:
+    desc: Stop both MCP test server and proxy
+    cmds:
+      - echo "Stopping servers..."
+      - ./scripts/stop-servers.sh
+
+  demo:
+    desc: Run the complete demo (requires servers to be running)
+    cmds:
+      - echo "Running demo..."
+      - ./scripts/demo-proxy.sh
 
   test:
     desc: Run all tests

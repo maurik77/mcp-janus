@@ -134,6 +134,36 @@ curl http://localhost:8443/health
 # {"status":"ok"}
 ```
 
+## 🧪 Testing with the Test Server
+
+The project includes a test MCP server (`cmd/mcpserver`) that implements a fake weather tool, perfect for testing the proxy without needing real MCP servers.
+
+### Quick Test Setup
+
+```bash
+# Build both servers
+task build
+task build-testserver
+
+# Terminal 1: Start the test MCP server
+task run-testserver
+# Runs on http://localhost:8081
+
+# Terminal 2: Start the proxy (configure to point to localhost:8081)
+task run
+
+# Terminal 3: Run the test script
+task test-testserver
+```
+
+### Test Server Features
+
+- **Fake Weather Tool**: Returns deterministic weather data for any city and date
+- **MCP Protocol**: Implements `tools/list`, `tools/call`, and `initialize` methods
+- **No Dependencies**: Runs standalone for easy testing
+
+See [Testing Guide](docs/testing-guide.md) and [Test Server README](cmd/mcpserver/README.md) for details.
+
 ## 📖 API Endpoints
 
 ### Protected Resource Metadata (RFC 9728)
