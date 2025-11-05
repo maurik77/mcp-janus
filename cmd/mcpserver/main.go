@@ -2,51 +2,30 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
-	"fmt"
 	"log"
 	"math/rand"
 	"net/http"
-	"time"
 
-	"github.com/gin-gonic/gin"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// MCP Protocol structures
-type MCPRequest struct {
-	Method string                 `json:"method"`
-	Params map[string]interface{} `json:"params,omitempty"`
+func main() {
+
+	runServer("localhost:8081")
+
 }
 
-type MCPResponse struct {
-	Result interface{} `json:"result,omitempty"`
-	Error  *MCPError   `json:"error,omitempty"`
+type GetWeatherParams struct {
+	City string `json:"city" jsonschema:"City to get weather for (nyc, sf, or boston)"`
+	Date string `json:"date" jsonschema:"Date to get weather for (YYYY-MM-DD)"`
 }
 
-type MCPError struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
+var weatherConditions = []string{
+	"Sunny", "Partly Cloudy", "Cloudy", "Rainy", "Stormy", "Snowy", "Foggy", "Windy",
 }
 
-// Tool structures
-type Tool struct {
-	Name        string      `json:"name"`
-	Description string      `json:"description"`
-	InputSchema InputSchema `json:"inputSchema"`
-}
-
-type InputSchema struct {
-	Type       string              `json:"type"`
-	Properties map[string]Property `json:"properties"`
-	Required   []string            `json:"required"`
-}
-
-type Property struct {
-	Type        string `json:"type"`
-	Description string `json:"description"`
-}
-
-// Weather response structure
 type WeatherResult struct {
 	City        string  `json:"city"`
 	Date        string  `json:"date"`
@@ -56,192 +35,48 @@ type WeatherResult struct {
 	WindSpeed   float64 `json:"wind_speed"`
 }
 
-var weatherConditions = []string{
-	"Sunny", "Partly Cloudy", "Cloudy", "Rainy", "Stormy", "Snowy", "Foggy", "Windy",
-}
+func runServer(url string) {
+	// Create an MCP server.
+	server := mcp.NewServer(&mcp.Implementation{
+		Name:    "time-server",
+		Version: "1.0.0",
+	}, nil)
 
-func main() {
-	rand.Seed(time.Now().UnixNano())
+	// Add the cityTime tool.
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "cityWeather",
+		Description: "Get weather information for a specific city and date",
+	}, getWeather)
 
-	gin.SetMode(gin.ReleaseMode)
-	r := gin.Default()
+	// Create the streamable HTTP handler.
+	handler := mcp.NewStreamableHTTPHandler(func(req *http.Request) *mcp.Server {
+		return server
+	}, nil)
 
-	// MCP endpoints
-	r.POST("/mcp", handleMCPRequest)
-	r.GET("/health", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"status": "ok"})
-	})
+	handlerWithLogging := loggingHandler(handler)
 
-	port := "8081"
-	log.Printf("MCP Test Server starting on :%s", port)
-	log.Printf("Available tools: get_weather")
-	if err := r.Run(":" + port); err != nil {
+	log.Printf("MCP server listening on %s", url)
+	log.Printf("Available tool: cityWeather")
+
+	// Start the HTTP server with logging handler.
+	if err := http.ListenAndServe(url, handlerWithLogging); err != nil {
 		log.Fatalf("Server failed: %v", err)
 	}
 }
 
-func handleMCPRequest(c *gin.Context) {
-	var req MCPRequest
-	if err := c.BindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, MCPResponse{
-			Error: &MCPError{
-				Code:    -32700,
-				Message: "Parse error",
-			},
-		})
-		return
-	}
+func getWeather(ctx context.Context, req *mcp.CallToolRequest, params *GetWeatherParams) (*mcp.CallToolResult, any, error) {
+	// Define time zones for each city
+	response := generateFakeWeather(params.City, params.Date)
 
-	log.Printf("MCP Request: method=%s, params=%v", req.Method, req.Params)
+	content, _ := json.Marshal(response)
 
-	switch req.Method {
-	case "tools/list":
-		handleToolsList(c)
-	case "tools/call":
-		handleToolsCall(c, req.Params)
-	case "initialize":
-		handleInitialize(c)
-	default:
-		c.JSON(http.StatusOK, MCPResponse{
-			Error: &MCPError{
-				Code:    -32601,
-				Message: fmt.Sprintf("Method not found: %s", req.Method),
-			},
-		})
-	}
-}
-
-func handleInitialize(c *gin.Context) {
-	c.JSON(http.StatusOK, MCPResponse{
-		Result: map[string]interface{}{
-			"protocolVersion": "2024-11-05",
-			"serverInfo": map[string]interface{}{
-				"name":    "test-weather-server",
-				"version": "1.0.0",
-			},
-			"capabilities": map[string]interface{}{
-				"tools": map[string]interface{}{},
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{
+			&mcp.TextContent{
+				Text: string(content),
 			},
 		},
-	})
-}
-
-func handleToolsList(c *gin.Context) {
-	tools := []Tool{
-		{
-			Name:        "get_weather",
-			Description: "Get weather information for a specific city and date",
-			InputSchema: InputSchema{
-				Type: "object",
-				Properties: map[string]Property{
-					"city": {
-						Type:        "string",
-						Description: "The name of the city",
-					},
-					"date": {
-						Type:        "string",
-						Description: "The date in YYYY-MM-DD format",
-					},
-				},
-				Required: []string{"city", "date"},
-			},
-		},
-	}
-
-	c.JSON(http.StatusOK, MCPResponse{
-		Result: map[string]interface{}{
-			"tools": tools,
-		},
-	})
-}
-
-func handleToolsCall(c *gin.Context, params map[string]interface{}) {
-	toolName, ok := params["name"].(string)
-	if !ok {
-		c.JSON(http.StatusOK, MCPResponse{
-			Error: &MCPError{
-				Code:    -32602,
-				Message: "Invalid params: missing tool name",
-			},
-		})
-		return
-	}
-
-	arguments, ok := params["arguments"].(map[string]interface{})
-	if !ok {
-		c.JSON(http.StatusOK, MCPResponse{
-			Error: &MCPError{
-				Code:    -32602,
-				Message: "Invalid params: missing arguments",
-			},
-		})
-		return
-	}
-
-	switch toolName {
-	case "get_weather":
-		handleGetWeather(c, arguments)
-	default:
-		c.JSON(http.StatusOK, MCPResponse{
-			Error: &MCPError{
-				Code:    -32602,
-				Message: fmt.Sprintf("Unknown tool: %s", toolName),
-			},
-		})
-	}
-}
-
-func handleGetWeather(c *gin.Context, args map[string]interface{}) {
-	city, ok := args["city"].(string)
-	if !ok {
-		c.JSON(http.StatusOK, MCPResponse{
-			Error: &MCPError{
-				Code:    -32602,
-				Message: "Missing required parameter: city",
-			},
-		})
-		return
-	}
-
-	date, ok := args["date"].(string)
-	if !ok {
-		c.JSON(http.StatusOK, MCPResponse{
-			Error: &MCPError{
-				Code:    -32602,
-				Message: "Missing required parameter: date",
-			},
-		})
-		return
-	}
-
-	// Validate date format
-	_, err := time.Parse("2006-01-02", date)
-	if err != nil {
-		c.JSON(http.StatusOK, MCPResponse{
-			Error: &MCPError{
-				Code:    -32602,
-				Message: "Invalid date format. Use YYYY-MM-DD",
-			},
-		})
-		return
-	}
-
-	// Generate fake weather data
-	weather := generateFakeWeather(city, date)
-
-	// Format as MCP tool result
-	content, _ := json.Marshal(weather)
-
-	c.JSON(http.StatusOK, MCPResponse{
-		Result: map[string]interface{}{
-			"content": []map[string]interface{}{
-				{
-					"type": "text",
-					"text": string(content),
-				},
-			},
-		},
-	})
+	}, nil, nil
 }
 
 func generateFakeWeather(city, date string) WeatherResult {
