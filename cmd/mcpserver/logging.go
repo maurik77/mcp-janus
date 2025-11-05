@@ -5,6 +5,8 @@
 package main
 
 import (
+	"bytes"
+	"io"
 	"log"
 	"net/http"
 	"time"
@@ -28,15 +30,25 @@ func loggingHandler(handler http.Handler) http.Handler {
 		// Create a response writer wrapper to capture status code.
 		wrapped := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
 
+		// clone request to get body
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			log.Printf("Error reading request body: %v", err)
+		}
+		r.Body = io.NopCloser(bytes.NewBuffer(body))
+
 		// Log request details.
-		log.Printf("[REQUEST] %s | %s | %s %s",
+		log.Printf("[REQUEST] %s | %s | %s %s | Body: %s",
 			start.Format(time.RFC3339),
 			r.RemoteAddr,
 			r.Method,
-			r.URL.Path)
+			r.URL,
+			string(body))
 
 		// Call the actual handler.
 		handler.ServeHTTP(wrapped, r)
+
+		// Get response body is not feasible here without modifying the handler to capture it.
 
 		// Log response details.
 		duration := time.Since(start)

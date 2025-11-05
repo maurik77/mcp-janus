@@ -1,0 +1,19 @@
+proxy:
+  base_url: http://localhost:8080
+  listen_addr: ":8080"
+
+idp:
+  issuer_url: https://auth.example.com
+  client_id: mcp-proxy-client
+  client_secret: supersecret123
+  authorization_endpoint: https://auth.example.com/oauth/authorize
+  token_endpoint: https://auth.example.com/oauth/token
+
+encryption:
+  master_key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+
+upstreams:
+  - name: weather-test
+    resource: http://localhost:8081
+    base_url: http://localhost:8081
+    path_prefix: /mcp
