@@ -41,8 +41,16 @@ note left
 }
 end note
 activate Proxy
-Proxy -> Proxy: Concat Redirect Uris + create random Secret. Encrypt it -> proxy_client_id. Encrypt secret -> proxy_client_secret
+Proxy -> Proxy:Concat Redirect Uris + create random Secret. Encrypt it -> proxy_client_id. \nSecret -> proxy_client_secret
 Proxy --> Client: {proxy_client_id, proxy_client_secret}
+note right
+     {
+      "client_id": "[encrypted info]",
+      "client_secret": "cf136dc3c1fc93f31185e5885805d",
+      "client_id_issued_at": 2893256800,
+      "client_secret_expires_at": 2893276800
+     }
+end note
 deactivate Proxy
 
 == Authorization Request (PKCE) ==
