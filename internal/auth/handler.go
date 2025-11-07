@@ -16,14 +16,6 @@ type PKCECode struct {
 	ExpiresAt    int64  `json:"exp"`
 }
 
-type OpaqueToken struct {
-	AccessToken  string `json:"a"`
-	RefreshToken string `json:"r"`
-	Resource     string `json:"res"`
-	ClientID     string `json:"c"`
-	ExpiresAt    int64  `json:"exp"`
-}
-
 // /register → client_id stateless
 func RegisterHandler(w http.ResponseWriter, r *http.Request, cfg *config.Config, key [32]byte) {
 	var req struct {

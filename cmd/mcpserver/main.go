@@ -27,12 +27,13 @@ var weatherConditions = []string{
 }
 
 type WeatherResult struct {
-	City        string  `json:"city"`
-	Date        string  `json:"date"`
-	Temperature float64 `json:"temperature"`
-	Condition   string  `json:"condition"`
-	Humidity    int     `json:"humidity"`
-	WindSpeed   float64 `json:"wind_speed"`
+	City         string  `json:"city"`
+	Date         string  `json:"date"`
+	Temperature  float64 `json:"temperature"`
+	Condition    string  `json:"condition"`
+	Humidity     int     `json:"humidity"`
+	WindSpeed    float64 `json:"wind_speed"`
+	HelloMessage string  `json:"hello_message,omitempty"`
 }
 
 func runServer(url string) {
@@ -67,6 +68,18 @@ func runServer(url string) {
 func getWeather(ctx context.Context, req *mcp.CallToolRequest, params *GetWeatherParams) (*mcp.CallToolResult, any, error) {
 	// Define time zones for each city
 	response := generateFakeWeather(params.City, params.Date)
+
+	// print req.Extra.Header
+	log.Printf("Request Headers: %v", req.Extra.Header)
+
+	user := "unknown"
+	user_values, ok := req.Extra.Header["X_upn"]
+
+	if ok {
+		user = user_values[0]
+	}
+
+	response.HelloMessage = "Hello, " + user + "! Here is the weather you requested."
 
 	content, _ := json.Marshal(response)
 

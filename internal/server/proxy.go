@@ -3,15 +3,15 @@ package server
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"strings"
-	"time"
 
 	"mcpproxy/internal/auth"
 	"mcpproxy/internal/config"
+
+	"github.com/golang-jwt/jwt/v5"
 )
 
 // extractBearerToken extracts token from Authorization header
@@ -41,33 +41,53 @@ func AuthMiddleware(cfg *config.Config, key [32]byte) func(http.Handler) http.Ha
 				return
 			}
 
-			var t auth.OpaqueToken
-			if err := json.Unmarshal(data, &t); err != nil {
-				http.Error(w, `{"error":"invalid_token"}`, http.StatusUnauthorized)
-				return
+			// Unmarshal data into jwt.Token
+			jwtToken, _, err := new(jwt.Parser).ParseUnverified(string(data), jwt.MapClaims{})
+			if err != nil {
+				panic(err)
 			}
 
+			// var t oauth2.Token
+			// if err := json.Unmarshal(data, &t); err != nil {
+			// 	http.Error(w, `{"error":"invalid_token"}`, http.StatusUnauthorized)
+			// 	return
+			// }
+
 			// Validate expiration
-			if time.Now().Unix() > t.ExpiresAt {
-				http.Error(w, `{"error":"expired_token"}`, http.StatusUnauthorized)
-				return
-			}
+			// if time.Now().Unix() > t.ExpiresIn {
+			// 	http.Error(w, `{"error":"expired_token"}`, http.StatusUnauthorized)
+			// 	return
+			// }
 
 			// Find upstream by resource
 			var upstream *config.Upstream
 			for _, u := range cfg.Upstreams {
-				if u.Resource == t.Resource {
-					upstream = &u
-					break
-				}
+				// if u.Resource == t.Resource {
+				upstream = &u
+				break
+				// }
 			}
 			if upstream == nil {
 				http.Error(w, `{"error":"invalid_resource"}`, http.StatusForbidden)
 				return
 			}
 
+			// Extract claims
+			claims, ok := jwtToken.Claims.(jwt.MapClaims)
+			if !ok {
+				panic("cannot parse claims")
+			}
+
+			// Read the 'upn' claim
+			upn, ok := claims["upn"].(string)
+
+			if !ok || upn == "" {
+				upn = "unknown"
+			}
+
 			// Inject into context
-			ctx := context.WithValue(r.Context(), "real_token", t.AccessToken)
+			ctx := context.WithValue(r.Context(), "real_token", token)
+			r.Header.Add("X_UPN", upn)
 			ctx = context.WithValue(ctx, "upstream", *upstream)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
