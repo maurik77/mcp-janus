@@ -5,11 +5,12 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -83,7 +84,7 @@ func main() {
 			AuthURL:  cfg.IDP.AuthorizationEndpoint,
 			TokenURL: cfg.IDP.TokenEndpoint,
 		},
-		Scopes: []string{"openid", "mcp"},
+		Scopes: cfg.IDP.Scopes,
 	}
 
 	// Set Gin mode based on environment
@@ -109,9 +110,7 @@ func main() {
 	r.GET("/.well-known/oauth-protected-resource", ginHandler(server.ProtectedResourceMetadataHandler(cfg)))
 
 	// Dynamic Client Registration
-	r.POST("/register", func(c *gin.Context) {
-		auth.RegisterHandler(c.Writer, c.Request, cfg, encKey)
-	})
+	r.POST("/register", ginWrap(registerHandler))
 
 	// Authorization Code Flow
 	r.GET("/auth", ginWrap(authHandler))
@@ -161,53 +160,79 @@ func main() {
 	}
 	log.Println("Server stopped.")
 }
+
+type stateData struct {
+	OriginalState string `json:"s"`
+	RedirectURI   string `json:"e"`
+}
+
+func (s *stateData) Encode() string {
+	// concatenate OriginalState and RedirectURI with a separator | and url encode
+	encoded := url.QueryEscape(s.OriginalState + "|" + s.RedirectURI)
+	return encoded
+}
+
+func DecodeStateData(encoded string) (*stateData, error) {
+	decoded, err := url.QueryUnescape(encoded)
+	if err != nil {
+		return nil, err
+	}
+	parts := make([]string, 2)
+	splitIndex := -1
+	for i, c := range decoded {
+		if c == '|' {
+			splitIndex = i
+			break
+		}
+	}
+	if splitIndex == -1 {
+		return nil, fmt.Errorf("invalid state data")
+	}
+	parts[0] = decoded[:splitIndex]
+	parts[1] = decoded[splitIndex+1:]
+
+	return &stateData{
+		OriginalState: parts[0],
+		RedirectURI:   parts[1],
+	}, nil
+}
+
+// authHandler: client → Proxy
+
 func authHandler(w http.ResponseWriter, r *http.Request) {
 	clientID := r.URL.Query().Get("client_id")
-	resource := r.URL.Query().Get("resource")
 	state := r.URL.Query().Get("state")
+	code_challenge := r.URL.Query().Get("code_challenge")
+	redirect_uri := r.URL.Query().Get("redirect_uri")
+	code_challenge_method := r.URL.Query().Get("code_challenge_method")
 
-	if clientID == "" || resource == "" {
+	if clientID == "" {
 		http.Error(w, `{"error":"invalid_request"}`, http.StatusBadRequest)
 		return
 	}
 
+	clientData, err := DecodeClientID(clientID, encKey)
+
+	// print clientData for debugging
+	fmt.Printf("Decoded client data: %+v\n", clientData)
+
 	// Decrypt client_id to get redirect_uri
-	clientData, err := auth.Decrypt(strings.TrimPrefix(clientID, "cli_"), encKey)
 	if err != nil {
 		http.Error(w, `{"error":"invalid_client"}`, http.StatusBadRequest)
 		return
 	}
 
-	var clientInfo struct {
-		RedirectURI string `json:"r"`
+	stateData := stateData{
+		OriginalState: state,
+		RedirectURI:   redirect_uri,
 	}
-	if err := json.Unmarshal(clientData, &clientInfo); err != nil {
-		http.Error(w, `{"error":"invalid_client"}`, http.StatusBadRequest)
-		return
-	}
-
-	// Generate PKCE
-	verifier, challenge := auth.GeneratePKCE()
-
-	// Create encrypted code (stateless)
-	codePayload := auth.PKCECode{
-		CodeVerifier: verifier,
-		ClientID:     clientID,
-		Resource:     resource,
-		State:        state,
-		ExpiresAt:    time.Now().Add(10 * time.Minute).Unix(),
-	}
-	codeJSON, _ := json.Marshal(codePayload)
-	encryptedCode, _ := auth.Encrypt(codeJSON, encKey)
 
 	// Redirect to real IdP
 	authURL := oauthConfig.AuthCodeURL(
-		state,
-		oauth2.SetAuthURLParam("code_challenge", challenge),
-		oauth2.SetAuthURLParam("code_challenge_method", "S256"),
-		oauth2.SetAuthURLParam("resource", resource),
+		stateData.Encode(),
+		oauth2.SetAuthURLParam("code_challenge", code_challenge),
+		oauth2.SetAuthURLParam("code_challenge_method", code_challenge_method),
 		oauth2.SetAuthURLParam("redirect_uri", cfg.Proxy.BaseURL+"/callback"),
-		oauth2.SetAuthURLParam("code", encryptedCode), // Pass encrypted code
 	)
 
 	http.Redirect(w, r, authURL, http.StatusFound)
@@ -215,9 +240,33 @@ func authHandler(w http.ResponseWriter, r *http.Request) {
 
 // callbackHandler: IdP → Proxy
 func callbackHandler(w http.ResponseWriter, r *http.Request) {
-	// In real flow, IdP redirects here with code
-	// For stateless, we expect client to call /token directly
-	http.Error(w, "Use /token endpoint", http.StatusBadRequest)
+	// Read state and code
+	stateParam := r.URL.Query().Get("state")
+	codeParam := r.URL.Query().Get("code")
+	if stateParam == "" || codeParam == "" {
+		http.Error(w, `{"error":"invalid_request"}`, http.StatusBadRequest)
+		return
+	}
+
+	// Decode state
+	stateData, err := DecodeStateData(stateParam)
+	if err != nil {
+		http.Error(w, `{"error":"invalid_request"}`, http.StatusBadRequest)
+		return
+	}
+
+	// Redirect back to client with original state and code
+	redirectURL, err := url.Parse(stateData.RedirectURI)
+	if err != nil {
+		http.Error(w, `{"error":"invalid_request"}`, http.StatusBadRequest)
+		return
+	}
+	query := redirectURL.Query()
+	query.Set("code", codeParam)
+	query.Set("state", stateData.OriginalState)
+	redirectURL.RawQuery = query.Encode()
+
+	http.Redirect(w, r, redirectURL.String(), http.StatusFound)
 }
 
 // tokenHandler: client → Proxy
@@ -278,7 +327,7 @@ func tokenHandler(w http.ResponseWriter, r *http.Request) {
 	opaqueToken, _ := auth.Encrypt(opaqueJSON, encKey)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	json.NewEncoder(w).Encode(map[string]any{
 		"access_token": "tok_" + opaqueToken,
 		"token_type":   "Bearer",
 		"expires_in":   token.ExpiresIn,
@@ -289,4 +338,88 @@ func tokenHandler(w http.ResponseWriter, r *http.Request) {
 func refreshHandler(w http.ResponseWriter, r *http.Request) {
 	// TODO: implement refresh using encrypted refresh token
 	http.Error(w, `{"error":"not_implemented"}`, http.StatusNotImplemented)
+}
+
+type registerRequest struct {
+	ClientName              string   `json:"client_name"`
+	RedirectURIs            []string `json:"redirect_uris"`
+	GrantTypes              []string `json:"grant_types"`
+	ResponseTypes           []string `json:"response_types"`
+	TokenEndpointAuthMethod string   `json:"token_endpoint_auth_method"`
+}
+
+type registerResponse struct {
+	ClientID     string `json:"client_id"`
+	ClientSecret string `json:"client_secret"`
+}
+
+type clientIdData struct {
+	RedirectURIs []string `json:"r"`
+	Secret       string   `json:"s"`
+}
+
+func (c *clientIdData) Encode(key [32]byte) (string, error) {
+	dataJSON, err := json.Marshal(c)
+	if err != nil {
+		return "", err
+	}
+	encrypted, err := auth.Encrypt(dataJSON, key)
+	if err != nil {
+		return "", err
+	}
+	return encrypted, nil
+}
+
+func DecodeClientID(encrypted string, key [32]byte) (*clientIdData, error) {
+	data, err := auth.Decrypt(encrypted, key)
+	if err != nil {
+		return nil, err
+	}
+	var cid clientIdData
+	if err := json.Unmarshal(data, &cid); err != nil {
+		return nil, err
+	}
+	return &cid, nil
+}
+
+func registerHandler(w http.ResponseWriter, r *http.Request) {
+	var req registerRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid_request"}`, http.StatusBadRequest)
+		return
+	}
+
+	clientId, secret, err := generateClientID(req, encKey)
+
+	if err != nil {
+		http.Error(w, `{"error":"server_error"}`, http.StatusInternalServerError)
+		return
+	}
+
+	res := registerResponse{
+		ClientID:     clientId,
+		ClientSecret: secret,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(res)
+}
+
+func generateClientID(req registerRequest, key [32]byte) (string, string, error) {
+	// For simplicity, we only store redirect_uris in encrypted client_id
+	// Generate a random secret (in real case, should be more robust)
+	secretBytes := make([]byte, 16)
+	for i := range secretBytes {
+		secretBytes[i] = byte(65 + i) // Simple deterministic for example
+	}
+	clientSecret := hex.EncodeToString(secretBytes)
+
+	clientData := clientIdData{
+		RedirectURIs: req.RedirectURIs,
+		Secret:       clientSecret,
+	}
+
+	encryptedClientID, err := clientData.Encode(key)
+
+	return encryptedClientID, clientSecret, err
 }

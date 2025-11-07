@@ -18,11 +18,12 @@ type Config struct {
 		ListenAddr string `mapstructure:"listen_addr"`
 	} `mapstructure:"proxy"`
 	IDP struct {
-		IssuerURL             string `mapstructure:"issuer_url"`
-		ClientID              string `mapstructure:"client_id"`
-		ClientSecret          string `mapstructure:"client_secret"`
-		AuthorizationEndpoint string `mapstructure:"authorization_endpoint"`
-		TokenEndpoint         string `mapstructure:"token_endpoint"`
+		IssuerURL             string   `mapstructure:"issuer_url"`
+		ClientID              string   `mapstructure:"client_id"`
+		ClientSecret          string   `mapstructure:"client_secret"`
+		AuthorizationEndpoint string   `mapstructure:"authorization_endpoint"`
+		TokenEndpoint         string   `mapstructure:"token_endpoint"`
+		Scopes                []string `mapstructure:"scopes"`
 	} `mapstructure:"idp"`
 	Encryption struct {
 		MasterKey string `mapstructure:"master_key"`

@@ -11,10 +11,11 @@ import (
 // OpenIDConfigurationHandler serves /.well-known/openid-configuration (RFC 8414)
 func OpenIDConfigurationHandler(cfg *config.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		data := map[string]interface{}{
+		data := map[string]any{
 			"issuer":                                cfg.Proxy.BaseURL,
 			"authorization_endpoint":                cfg.Proxy.BaseURL + "/auth",
 			"token_endpoint":                        cfg.Proxy.BaseURL + "/token",
+			"registration_endpoint":                 cfg.Proxy.BaseURL + "/register",
 			"response_types_supported":              []string{"code"},
 			"grant_types_supported":                 []string{"authorization_code", "refresh_token"},
 			"code_challenge_methods_supported":      []string{"S256"},
@@ -38,7 +39,7 @@ func ProtectedResourceMetadataHandler(cfg *config.Config) http.HandlerFunc {
 			}
 		}
 
-		data := map[string]interface{}{
+		data := map[string]any{
 			"authorization_servers":         []string{cfg.Proxy.BaseURL},
 			"resource":                      cfg.Proxy.BaseURL,
 			"resource_indicators_supported": true,
