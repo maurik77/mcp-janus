@@ -278,60 +278,59 @@ func tokenHandler(w http.ResponseWriter, r *http.Request) {
 
 	code := r.FormValue("code")
 	clientID := r.FormValue("client_id")
+	codeVerifier := r.FormValue("code_verifier")
+	clientSecret := r.FormValue("client_secret")
 
 	if code == "" || clientID == "" {
 		http.Error(w, `{"error":"invalid_request"}`, http.StatusBadRequest)
 		return
 	}
 
-	// Decrypt code
-	data, err := auth.Decrypt(code, encKey)
+	clientData, err := DecodeClientID(clientID, encKey)
+
+	// print clientData for debugging
+	fmt.Printf("Decoded client data in tokenHandler: %+v\n", clientData)
+
 	if err != nil {
-		http.Error(w, `{"error":"invalid_grant"}`, http.StatusBadRequest)
+		http.Error(w, `{"error":"client_id_invalid"}`, http.StatusBadRequest)
 		return
 	}
 
-	var pkce auth.PKCECode
-	if err := json.Unmarshal(data, &pkce); err != nil {
-		http.Error(w, `{"error":"invalid_grant"}`, http.StatusBadRequest)
-		return
-	}
-
-	if time.Now().Unix() > pkce.ExpiresAt {
-		http.Error(w, `{"error":"expired_code"}`, http.StatusBadRequest)
+	if clientData.Secret != clientSecret {
+		http.Error(w, `{"error":"client_secret_invalid"}`, http.StatusBadRequest)
 		return
 	}
 
 	// Exchange with real IdP
 	token, err := oauthConfig.Exchange(
 		context.Background(),
-		"", // code is in encrypted payload
+		code,
 		oauth2.SetAuthURLParam("grant_type", "authorization_code"),
-		oauth2.SetAuthURLParam("code_verifier", pkce.CodeVerifier),
-		oauth2.SetAuthURLParam("resource", pkce.Resource),
+		oauth2.SetAuthURLParam("code_verifier", codeVerifier),
 	)
+
 	if err != nil {
 		http.Error(w, `{"error":"token_exchange_failed"}`, http.StatusInternalServerError)
 		return
 	}
 
-	// Create opaque token
-	opaque := auth.OpaqueToken{
-		AccessToken:  token.AccessToken,
-		RefreshToken: token.RefreshToken,
-		Resource:     pkce.Resource,
-		ClientID:     pkce.ClientID,
-		ExpiresAt:    time.Now().Add(time.Duration(token.ExpiresIn) * time.Second).Unix(),
+	opaqueToken := token
+	opaqueToken.AccessToken, err = auth.Encrypt([]byte(token.AccessToken), encKey)
+
+	if err != nil {
+		http.Error(w, `{"error":"server_error"}`, http.StatusInternalServerError)
+		return
 	}
-	opaqueJSON, _ := json.Marshal(opaque)
-	opaqueToken, _ := auth.Encrypt(opaqueJSON, encKey)
+
+	opaqueToken.RefreshToken, err = auth.Encrypt([]byte(token.RefreshToken), encKey)
+
+	if err != nil {
+		http.Error(w, `{"error":"server_error"}`, http.StatusInternalServerError)
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
-		"access_token": "tok_" + opaqueToken,
-		"token_type":   "Bearer",
-		"expires_in":   token.ExpiresIn,
-	})
+	json.NewEncoder(w).Encode(opaqueToken)
 }
 
 // refreshHandler
