@@ -17,6 +17,7 @@ import (
 	"mcpproxy/internal/auth"
 	"mcpproxy/internal/config"
 	"mcpproxy/internal/server"
+	"mcpproxy/internal/utility"
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/oauth2"
@@ -161,42 +162,6 @@ func main() {
 	log.Println("Server stopped.")
 }
 
-type stateData struct {
-	OriginalState string `json:"s"`
-	RedirectURI   string `json:"e"`
-}
-
-func (s *stateData) Encode() string {
-	// concatenate OriginalState and RedirectURI with a separator | and url encode
-	encoded := url.QueryEscape(s.OriginalState + "|" + s.RedirectURI)
-	return encoded
-}
-
-func DecodeStateData(encoded string) (*stateData, error) {
-	decoded, err := url.QueryUnescape(encoded)
-	if err != nil {
-		return nil, err
-	}
-	parts := make([]string, 2)
-	splitIndex := -1
-	for i, c := range decoded {
-		if c == '|' {
-			splitIndex = i
-			break
-		}
-	}
-	if splitIndex == -1 {
-		return nil, fmt.Errorf("invalid state data")
-	}
-	parts[0] = decoded[:splitIndex]
-	parts[1] = decoded[splitIndex+1:]
-
-	return &stateData{
-		OriginalState: parts[0],
-		RedirectURI:   parts[1],
-	}, nil
-}
-
 // authHandler: client → Proxy
 
 func authHandler(w http.ResponseWriter, r *http.Request) {
@@ -211,7 +176,7 @@ func authHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	clientData, err := DecodeClientID(clientID, encKey)
+	clientData, err := auth.DecodeClientID(clientID, encKey)
 
 	// print clientData for debugging
 	fmt.Printf("Decoded client data: %+v\n", clientData)
@@ -222,7 +187,7 @@ func authHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	stateData := stateData{
+	stateData := auth.StateData{
 		OriginalState: state,
 		RedirectURI:   redirect_uri,
 	}
@@ -249,7 +214,7 @@ func callbackHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Decode state
-	stateData, err := DecodeStateData(stateParam)
+	stateData, err := auth.DecodeStateData(stateParam)
 	if err != nil {
 		http.Error(w, `{"error":"invalid_request"}`, http.StatusBadRequest)
 		return
@@ -286,7 +251,7 @@ func tokenHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	clientData, err := DecodeClientID(clientID, encKey)
+	clientData, err := auth.DecodeClientID(clientID, encKey)
 
 	// print clientData for debugging
 	fmt.Printf("Decoded client data in tokenHandler: %+v\n", clientData)
@@ -315,14 +280,14 @@ func tokenHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	opaqueToken := token
-	opaqueToken.AccessToken, err = auth.Encrypt([]byte(token.AccessToken), encKey)
+	opaqueToken.AccessToken, err = utility.Encrypt([]byte(token.AccessToken), encKey)
 
 	if err != nil {
 		http.Error(w, `{"error":"server_error"}`, http.StatusInternalServerError)
 		return
 	}
 
-	opaqueToken.RefreshToken, err = auth.Encrypt([]byte(token.RefreshToken), encKey)
+	opaqueToken.RefreshToken, err = utility.Encrypt([]byte(token.RefreshToken), encKey)
 
 	if err != nil {
 		http.Error(w, `{"error":"server_error"}`, http.StatusInternalServerError)
@@ -339,50 +304,8 @@ func refreshHandler(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, `{"error":"not_implemented"}`, http.StatusNotImplemented)
 }
 
-type registerRequest struct {
-	ClientName              string   `json:"client_name"`
-	RedirectURIs            []string `json:"redirect_uris"`
-	GrantTypes              []string `json:"grant_types"`
-	ResponseTypes           []string `json:"response_types"`
-	TokenEndpointAuthMethod string   `json:"token_endpoint_auth_method"`
-}
-
-type registerResponse struct {
-	ClientID     string `json:"client_id"`
-	ClientSecret string `json:"client_secret"`
-}
-
-type clientIdData struct {
-	RedirectURIs []string `json:"r"`
-	Secret       string   `json:"s"`
-}
-
-func (c *clientIdData) Encode(key [32]byte) (string, error) {
-	dataJSON, err := json.Marshal(c)
-	if err != nil {
-		return "", err
-	}
-	encrypted, err := auth.Encrypt(dataJSON, key)
-	if err != nil {
-		return "", err
-	}
-	return encrypted, nil
-}
-
-func DecodeClientID(encrypted string, key [32]byte) (*clientIdData, error) {
-	data, err := auth.Decrypt(encrypted, key)
-	if err != nil {
-		return nil, err
-	}
-	var cid clientIdData
-	if err := json.Unmarshal(data, &cid); err != nil {
-		return nil, err
-	}
-	return &cid, nil
-}
-
 func registerHandler(w http.ResponseWriter, r *http.Request) {
-	var req registerRequest
+	var req auth.RegisterRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, `{"error":"invalid_request"}`, http.StatusBadRequest)
 		return
@@ -395,7 +318,7 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res := registerResponse{
+	res := auth.RegisterResponse{
 		ClientID:     clientId,
 		ClientSecret: secret,
 	}
@@ -404,7 +327,7 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(res)
 }
 
-func generateClientID(req registerRequest, key [32]byte) (string, string, error) {
+func generateClientID(req auth.RegisterRequest, key [32]byte) (string, string, error) {
 	// For simplicity, we only store redirect_uris in encrypted client_id
 	// Generate a random secret (in real case, should be more robust)
 	secretBytes := make([]byte, 16)
@@ -413,7 +336,7 @@ func generateClientID(req registerRequest, key [32]byte) (string, string, error)
 	}
 	clientSecret := hex.EncodeToString(secretBytes)
 
-	clientData := clientIdData{
+	clientData := auth.ClientIdData{
 		RedirectURIs: req.RedirectURIs,
 		Secret:       clientSecret,
 	}

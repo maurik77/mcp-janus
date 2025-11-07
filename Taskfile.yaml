@@ -17,7 +17,6 @@ tasks:
     desc: Build the proxy server binary
     cmds:
       - echo "Building {{.BINARY_NAME}}..."
-      - mkdir -p {{.BUILD_DIR}}
       - go build -o {{.BUILD_DIR}}/{{.BINARY_NAME}} {{.MAIN_PATH}}
       - echo "✓ Build complete{{":"}} {{.BUILD_DIR}}/{{.BINARY_NAME}}"
     sources:
@@ -31,7 +30,6 @@ tasks:
     desc: Build the MCP test server binary
     cmds:
       - echo "Building {{.TEST_SERVER_NAME}}..."
-      - mkdir -p {{.BUILD_DIR}}
       - go build -o {{.BUILD_DIR}}/{{.TEST_SERVER_NAME}} {{.TEST_SERVER_PATH}}
       - echo "✓ Build complete{{":"}} {{.BUILD_DIR}}/{{.TEST_SERVER_NAME}}"
     sources:
@@ -43,10 +41,9 @@ tasks:
 
   run-testserver:
     desc: Build and run the MCP test server
-    deps: [build-testserver]
     cmds:
       - echo "Starting MCP test server on port 8081..."
-      - "{{.BUILD_DIR}}/{{.TEST_SERVER_NAME}}"
+      - go run {{.TEST_SERVER_PATH}}
 
   test-testserver:
     desc: Run tests against the MCP test server
@@ -105,7 +102,7 @@ tasks:
       UPSTREAM_MCP_URL: "http://localhost:8081"
     cmds:
       - echo "Starting MCP proxy server..."
-      - "{{.BUILD_DIR}}/{{.BINARY_NAME}}"
+      - go run {{.BINARY_NAME}}      
 
   install:
     desc: Download and verify dependencies

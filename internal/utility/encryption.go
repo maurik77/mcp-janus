@@ -1,5 +1,5 @@
 // internal/auth/encryption.go
-package auth
+package utility
 
 import (
 	"crypto/aes"

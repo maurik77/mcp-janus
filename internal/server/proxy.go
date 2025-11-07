@@ -8,8 +8,8 @@ import (
 	"net/url"
 	"strings"
 
-	"mcpproxy/internal/auth"
 	"mcpproxy/internal/config"
+	"mcpproxy/internal/utility"
 
 	"github.com/golang-jwt/jwt/v5"
 )
@@ -35,7 +35,7 @@ func AuthMiddleware(cfg *config.Config, key [32]byte) func(http.Handler) http.Ha
 			}
 
 			// Decrypt opaque token
-			data, err := auth.Decrypt(token, key)
+			data, err := utility.Decrypt(token, key)
 			if err != nil {
 				http.Error(w, `{"error":"invalid_token"}`, http.StatusUnauthorized)
 				return
