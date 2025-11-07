@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"mcpproxy/internal/config"
+	"mcpproxy/internal/metadata"
 	"mcpproxy/internal/utility"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -24,12 +25,12 @@ func extractBearerToken(r *http.Request) (string, bool) {
 }
 
 // AuthMiddleware validates opaque_token and injects real token + upstream
-func AuthMiddleware(cfg *config.Config, key [32]byte) func(http.Handler) http.Handler {
+func AuthMiddleware(cfg *config.Config, service metadata.Service, key [32]byte) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			token, ok := extractBearerToken(r)
 			if !ok {
-				w.Header().Set("WWW-Authenticate", WWWAuthenticateHeader(cfg.Proxy.BaseURL))
+				w.Header().Set("WWW-Authenticate", service.WWWAuthenticateHeader())
 				http.Error(w, `{"error":"invalid_token"}`, http.StatusUnauthorized)
 				return
 			}
@@ -59,36 +60,21 @@ func AuthMiddleware(cfg *config.Config, key [32]byte) func(http.Handler) http.Ha
 			// 	return
 			// }
 
-			// Find upstream by resource
-			var upstream *config.Upstream
-			for _, u := range cfg.Upstreams {
-				// if u.Resource == t.Resource {
-				upstream = &u
-				break
-				// }
-			}
-			if upstream == nil {
-				http.Error(w, `{"error":"invalid_resource"}`, http.StatusForbidden)
-				return
-			}
-
 			// Extract claims
 			claims, ok := jwtToken.Claims.(jwt.MapClaims)
 			if !ok {
 				panic("cannot parse claims")
 			}
 
-			// Read the 'upn' claim
-			upn, ok := claims["upn"].(string)
+			ctx := context.WithValue(r.Context(), "real_token", token)
 
-			if !ok || upn == "" {
-				upn = "unknown"
+			for source, dest := range cfg.IDP.ClaimsMapping {
+				if value, exists := claims[source]; exists {
+					r.Header.Add(dest, value.(string))
+				}
 			}
 
-			// Inject into context
-			ctx := context.WithValue(r.Context(), "real_token", token)
-			r.Header.Add("X_UPN", upn)
-			ctx = context.WithValue(ctx, "upstream", *upstream)
+			ctx = context.WithValue(ctx, "upstream", cfg.Upstream)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}

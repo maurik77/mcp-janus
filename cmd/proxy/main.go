@@ -3,12 +3,9 @@ package main
 
 import (
 	"context"
-	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
 	"syscall"
@@ -16,8 +13,8 @@ import (
 
 	"mcpproxy/internal/auth"
 	"mcpproxy/internal/config"
+	"mcpproxy/internal/metadata"
 	"mcpproxy/internal/server"
-	"mcpproxy/internal/utility"
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/oauth2"
@@ -30,22 +27,17 @@ var (
 )
 
 // ginHandler wraps http.HandlerFunc for Gin
-func ginHandler(h http.HandlerFunc) gin.HandlerFunc {
+func ginMetadataHandler(metadata func() any) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		h(c.Writer, c.Request)
-	}
-}
-
-// ginWrap wraps standard http.HandlerFunc for Gin
-func ginWrap(h http.HandlerFunc) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		h(c.Writer, c.Request)
+		data := metadata()
+		c.Header("Content-Type", "application/json")
+		json.NewEncoder(c.Writer).Encode(data)
 	}
 }
 
 // ginAuthMiddleware wraps the auth middleware for Gin
-func ginAuthMiddleware(cfg *config.Config, key [32]byte) gin.HandlerFunc {
-	middleware := server.AuthMiddleware(cfg, key)
+func ginAuthMiddleware(service metadata.Service) gin.HandlerFunc {
+	middleware := server.AuthMiddleware(cfg, service, encKey)
 	return func(c *gin.Context) {
 		var handlerCalled bool
 		wrappedHandler := middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -69,28 +61,19 @@ func main() {
 		log.Fatalf("Failed to load config: %v", err)
 	}
 
-	// Chiave di cifratura
-	if len(cfg.Encryption.MasterKey) != 64 {
-		log.Fatal("encryption.master_key must be 64 hex chars (32 bytes)")
-	}
-	keyBytes, _ := hex.DecodeString(cfg.Encryption.MasterKey)
-	copy(encKey[:], keyBytes)
-
-	// Config OAuth2 per IdP reale
-	oauthConfig = &oauth2.Config{
-		ClientID:     cfg.IDP.ClientID,
-		ClientSecret: cfg.IDP.ClientSecret,
-		RedirectURL:  cfg.Proxy.BaseURL + "/callback",
-		Endpoint: oauth2.Endpoint{
-			AuthURL:  cfg.IDP.AuthorizationEndpoint,
-			TokenURL: cfg.IDP.TokenEndpoint,
-		},
-		Scopes: cfg.IDP.Scopes,
-	}
-
 	// Set Gin mode based on environment
 	if os.Getenv("GIN_MODE") == "" {
 		gin.SetMode(gin.ReleaseMode)
+	}
+
+	authService, err := auth.New(*cfg)
+	if err != nil {
+		log.Fatalf("Failed to initialize auth handler: %v", err)
+	}
+
+	metadataService, err := metadata.New(*cfg)
+	if err != nil {
+		log.Fatalf("Failed to initialize metadata handler: %v", err)
 	}
 
 	// Router
@@ -107,21 +90,21 @@ func main() {
 	})
 
 	// Discovery
-	r.GET("/.well-known/openid-configuration", ginHandler(server.OpenIDConfigurationHandler(cfg)))
-	r.GET("/.well-known/oauth-protected-resource", ginHandler(server.ProtectedResourceMetadataHandler(cfg)))
+	r.GET("/.well-known/openid-configuration", ginMetadataHandler(metadataService.OpenIDConfiguration))
+	r.GET("/.well-known/oauth-protected-resource", ginMetadataHandler(metadataService.ProtectedResourceMetadata))
 
 	// Dynamic Client Registration
-	r.POST("/register", ginWrap(registerHandler))
+	r.POST("/register", registerHandler(authService))
 
 	// Authorization Code Flow
-	r.GET("/auth", ginWrap(authHandler))
-	r.GET("/callback", ginWrap(callbackHandler))
-	r.POST("/token", ginWrap(tokenHandler))
-	r.POST("/refresh", ginWrap(refreshHandler))
+	r.GET("/auth", authHandler(authService))
+	r.GET("/callback", callbackHandler(authService))
+	r.POST("/token", tokenHandler(authService))
+	r.POST("/refresh", refreshHandler(authService))
 
 	// Proxy API - with auth middleware
 	authorized := r.Group("/mcp")
-	authorized.Use(ginAuthMiddleware(cfg, encKey))
+	authorized.Use(ginAuthMiddleware(metadataService))
 	{
 		authorized.Any("/*path", func(c *gin.Context) {
 			server.ProxyHandler(c.Writer, c.Request)
@@ -142,7 +125,6 @@ func main() {
 	go func() {
 		log.Printf("MCP Proxy Server starting on %s", cfg.Proxy.ListenAddr)
 		log.Printf("Base URL: %s", cfg.Proxy.BaseURL)
-		log.Printf("Upstreams: %d configured", len(cfg.Upstreams))
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Server failed: %v", err)
 		}
@@ -164,184 +146,100 @@ func main() {
 
 // authHandler: client → Proxy
 
-func authHandler(w http.ResponseWriter, r *http.Request) {
-	clientID := r.URL.Query().Get("client_id")
-	state := r.URL.Query().Get("state")
-	code_challenge := r.URL.Query().Get("code_challenge")
-	redirect_uri := r.URL.Query().Get("redirect_uri")
-	code_challenge_method := r.URL.Query().Get("code_challenge_method")
+func authHandler(authService auth.Service) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		req := &auth.AuthenticateRequest{}
+		err := c.Bind(req)
 
-	if clientID == "" {
-		http.Error(w, `{"error":"invalid_request"}`, http.StatusBadRequest)
-		return
+		if err != nil {
+			http.Error(c.Writer, `{"error":"invalid_request"}`, http.StatusBadRequest)
+			return
+		}
+
+		authURL, err := authService.AuthenticateRequest(req)
+
+		if err != nil {
+			http.Error(c.Writer, `{"error":"server_error"}`, http.StatusInternalServerError)
+			return
+		}
+
+		http.Redirect(c.Writer, c.Request, authURL, http.StatusFound)
 	}
-
-	clientData, err := auth.DecodeClientID(clientID, encKey)
-
-	// print clientData for debugging
-	fmt.Printf("Decoded client data: %+v\n", clientData)
-
-	// Decrypt client_id to get redirect_uri
-	if err != nil {
-		http.Error(w, `{"error":"invalid_client"}`, http.StatusBadRequest)
-		return
-	}
-
-	stateData := auth.StateData{
-		OriginalState: state,
-		RedirectURI:   redirect_uri,
-	}
-
-	// Redirect to real IdP
-	authURL := oauthConfig.AuthCodeURL(
-		stateData.Encode(),
-		oauth2.SetAuthURLParam("code_challenge", code_challenge),
-		oauth2.SetAuthURLParam("code_challenge_method", code_challenge_method),
-		oauth2.SetAuthURLParam("redirect_uri", cfg.Proxy.BaseURL+"/callback"),
-	)
-
-	http.Redirect(w, r, authURL, http.StatusFound)
 }
 
 // callbackHandler: IdP → Proxy
-func callbackHandler(w http.ResponseWriter, r *http.Request) {
-	// Read state and code
-	stateParam := r.URL.Query().Get("state")
-	codeParam := r.URL.Query().Get("code")
-	if stateParam == "" || codeParam == "" {
-		http.Error(w, `{"error":"invalid_request"}`, http.StatusBadRequest)
-		return
-	}
+func callbackHandler(authService auth.Service) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		req := &auth.AuthorizationCodeData{}
+		err := c.BindQuery(req)
 
-	// Decode state
-	stateData, err := auth.DecodeStateData(stateParam)
-	if err != nil {
-		http.Error(w, `{"error":"invalid_request"}`, http.StatusBadRequest)
-		return
-	}
+		if err != nil {
+			http.Error(c.Writer, `{"error":"invalid_request"}`, http.StatusBadRequest)
+			return
+		}
 
-	// Redirect back to client with original state and code
-	redirectURL, err := url.Parse(stateData.RedirectURI)
-	if err != nil {
-		http.Error(w, `{"error":"invalid_request"}`, http.StatusBadRequest)
-		return
-	}
-	query := redirectURL.Query()
-	query.Set("code", codeParam)
-	query.Set("state", stateData.OriginalState)
-	redirectURL.RawQuery = query.Encode()
+		authData, redirectURL, err := authService.ManageAuthorizationCode(req)
 
-	http.Redirect(w, r, redirectURL.String(), http.StatusFound)
+		if err != nil {
+			http.Error(c.Writer, `{"error":"invalid_request"}`, http.StatusBadRequest)
+			return
+		}
+
+		query := redirectURL.Query()
+		query.Set("code", authData.Code)
+		query.Set("state", authData.State)
+		redirectURL.RawQuery = query.Encode()
+
+		http.Redirect(c.Writer, c.Request, redirectURL.String(), http.StatusFound)
+	}
 }
 
 // tokenHandler: client → Proxy
-func tokenHandler(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, `{"error":"invalid_request"}`, http.StatusBadRequest)
-		return
+func tokenHandler(authHandler auth.Service) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		req := &auth.AccessTokenRequest{}
+		err := c.Bind(req)
+
+		if err != nil {
+			http.Error(c.Writer, `{"error":"invalid_request"}`, http.StatusBadRequest)
+			return
+		}
+
+		opaqueToken, err := authHandler.RetrieveAccessToken(req)
+
+		if err != nil {
+			http.Error(c.Writer, `{"error":"server_error"}`, http.StatusInternalServerError)
+			return
+		}
+
+		c.Writer.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(c.Writer).Encode(opaqueToken)
 	}
-
-	code := r.FormValue("code")
-	clientID := r.FormValue("client_id")
-	codeVerifier := r.FormValue("code_verifier")
-	clientSecret := r.FormValue("client_secret")
-
-	if code == "" || clientID == "" {
-		http.Error(w, `{"error":"invalid_request"}`, http.StatusBadRequest)
-		return
-	}
-
-	clientData, err := auth.DecodeClientID(clientID, encKey)
-
-	// print clientData for debugging
-	fmt.Printf("Decoded client data in tokenHandler: %+v\n", clientData)
-
-	if err != nil {
-		http.Error(w, `{"error":"client_id_invalid"}`, http.StatusBadRequest)
-		return
-	}
-
-	if clientData.Secret != clientSecret {
-		http.Error(w, `{"error":"client_secret_invalid"}`, http.StatusBadRequest)
-		return
-	}
-
-	// Exchange with real IdP
-	token, err := oauthConfig.Exchange(
-		context.Background(),
-		code,
-		oauth2.SetAuthURLParam("grant_type", "authorization_code"),
-		oauth2.SetAuthURLParam("code_verifier", codeVerifier),
-	)
-
-	if err != nil {
-		http.Error(w, `{"error":"token_exchange_failed"}`, http.StatusInternalServerError)
-		return
-	}
-
-	opaqueToken := token
-	opaqueToken.AccessToken, err = utility.Encrypt([]byte(token.AccessToken), encKey)
-
-	if err != nil {
-		http.Error(w, `{"error":"server_error"}`, http.StatusInternalServerError)
-		return
-	}
-
-	opaqueToken.RefreshToken, err = utility.Encrypt([]byte(token.RefreshToken), encKey)
-
-	if err != nil {
-		http.Error(w, `{"error":"server_error"}`, http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(opaqueToken)
 }
 
 // refreshHandler
-func refreshHandler(w http.ResponseWriter, r *http.Request) {
-	// TODO: implement refresh using encrypted refresh token
-	http.Error(w, `{"error":"not_implemented"}`, http.StatusNotImplemented)
+func refreshHandler(_ auth.Service) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		http.Error(c.Writer, `{"error":"not_implemented"}`, http.StatusNotImplemented)
+	}
 }
 
-func registerHandler(w http.ResponseWriter, r *http.Request) {
-	var req auth.RegisterRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, `{"error":"invalid_request"}`, http.StatusBadRequest)
-		return
+func registerHandler(authHandler auth.Service) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		req := &auth.RegisterRequest{}
+		if err := json.NewDecoder(c.Request.Body).Decode(req); err != nil {
+			http.Error(c.Writer, `{"error":"invalid_request"}`, http.StatusBadRequest)
+			return
+		}
+
+		res, err := authHandler.RegisterClient(req)
+
+		if err != nil {
+			http.Error(c.Writer, `{"error":"server_error"}`, http.StatusInternalServerError)
+			return
+		}
+
+		c.Writer.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(c.Writer).Encode(res)
 	}
-
-	clientId, secret, err := generateClientID(req, encKey)
-
-	if err != nil {
-		http.Error(w, `{"error":"server_error"}`, http.StatusInternalServerError)
-		return
-	}
-
-	res := auth.RegisterResponse{
-		ClientID:     clientId,
-		ClientSecret: secret,
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(res)
-}
-
-func generateClientID(req auth.RegisterRequest, key [32]byte) (string, string, error) {
-	// For simplicity, we only store redirect_uris in encrypted client_id
-	// Generate a random secret (in real case, should be more robust)
-	secretBytes := make([]byte, 16)
-	for i := range secretBytes {
-		secretBytes[i] = byte(65 + i) // Simple deterministic for example
-	}
-	clientSecret := hex.EncodeToString(secretBytes)
-
-	clientData := auth.ClientIdData{
-		RedirectURIs: req.RedirectURIs,
-		Secret:       clientSecret,
-	}
-
-	encryptedClientID, err := clientData.Encode(key)
-
-	return encryptedClientID, clientSecret, err
 }

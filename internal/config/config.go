@@ -12,23 +12,28 @@ type Upstream struct {
 	PathPrefix string `mapstructure:"path_prefix"`
 }
 
+type IDP struct {
+	IssuerURL             string            `mapstructure:"issuer_url"`
+	ClientID              string            `mapstructure:"client_id"`
+	ClientSecret          string            `mapstructure:"client_secret"`
+	AuthorizationEndpoint string            `mapstructure:"authorization_endpoint"`
+	TokenEndpoint         string            `mapstructure:"token_endpoint"`
+	Scopes                []string          `mapstructure:"scopes"`
+	ClaimsMapping         map[string]string `mapstructure:"claims_mapping"`
+}
+
+type Proxy struct {
+	BaseURL    string `mapstructure:"base_url"`
+	ListenAddr string `mapstructure:"listen_addr"`
+}
+
 type Config struct {
-	Proxy struct {
-		BaseURL    string `mapstructure:"base_url"`
-		ListenAddr string `mapstructure:"listen_addr"`
-	} `mapstructure:"proxy"`
-	IDP struct {
-		IssuerURL             string   `mapstructure:"issuer_url"`
-		ClientID              string   `mapstructure:"client_id"`
-		ClientSecret          string   `mapstructure:"client_secret"`
-		AuthorizationEndpoint string   `mapstructure:"authorization_endpoint"`
-		TokenEndpoint         string   `mapstructure:"token_endpoint"`
-		Scopes                []string `mapstructure:"scopes"`
-	} `mapstructure:"idp"`
+	Proxy      Proxy `mapstructure:"proxy"`
+	IDP        IDP   `mapstructure:"idp"`
 	Encryption struct {
 		MasterKey string `mapstructure:"master_key"`
 	} `mapstructure:"encryption"`
-	Upstreams []Upstream `mapstructure:"upstreams"`
+	Upstream Upstream `mapstructure:"upstream"`
 }
 
 func Load() (*Config, error) {
