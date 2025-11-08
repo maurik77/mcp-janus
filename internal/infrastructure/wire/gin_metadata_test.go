@@ -59,7 +59,7 @@ func TestOpenIDConfigurationEndpoint(t *testing.T) {
 
 			// Assertions
 			assert.Equal(t, tt.expectedStatusCode, resp.Code)
-			assert.Equal(t, "application/json", resp.Header().Get("Content-Type"))
+			assert.Equal(t, "application/json; charset=utf-8", resp.Header().Get("Content-Type"))
 
 			var responseBody map[string]any
 			err = json.Unmarshal(resp.Body.Bytes(), &responseBody)
@@ -84,7 +84,7 @@ func TestProtectedResourceMetadataEndpoint(t *testing.T) {
 			name: "successful protected resource metadata",
 			mockResponse: map[string]any{
 				"resource":              "https://example.com/api",
-				"authorization_servers": []string{"https://example.com"},
+				"authorization_servers": []any{"https://example.com"},
 			},
 			expectedStatusCode: http.StatusOK,
 		},
@@ -119,7 +119,7 @@ func TestProtectedResourceMetadataEndpoint(t *testing.T) {
 
 			// Assertions
 			assert.Equal(t, tt.expectedStatusCode, resp.Code)
-			assert.Equal(t, "application/json", resp.Header().Get("Content-Type"))
+			assert.Equal(t, "application/json; charset=utf-8", resp.Header().Get("Content-Type"))
 
 			var responseBody map[string]any
 			err = json.Unmarshal(resp.Body.Bytes(), &responseBody)
