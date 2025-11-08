@@ -8,6 +8,11 @@ idp:
   client_secret: supersecret123
   authorization_endpoint: https://auth.example.com/oauth/authorize
   token_endpoint: https://auth.example.com/oauth/token
+  claims_mapping:
+    sub: X_sub
+    name: X_full_name
+    email: X_email
+    upn: X_upn  
 
 encryption:
   master_key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef

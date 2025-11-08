@@ -29,8 +29,8 @@ type AuthenticateRequest struct {
 }
 
 type AuthorizationCodeData struct {
-	State string `json:"state"`
-	Code  string `json:"code"`
+	State string `json:"state" form:"state"`
+	Code  string `json:"code" form:"code"`
 }
 
 type AccessTokenRequest struct {
@@ -64,12 +64,12 @@ func DecodeClientID(encrypted string, encryption utility.Encryption) (*ClientIdD
 	if err != nil {
 		return nil, err
 	}
-	var cid *ClientIdData
-	if err := json.Unmarshal(data, cid); err != nil {
+	var cid ClientIdData
+	if err := json.Unmarshal(data, &cid); err != nil {
 		return nil, err
 	}
 
-	return cid, nil
+	return &cid, nil
 }
 
 type StateData struct {
