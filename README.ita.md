@@ -19,6 +19,7 @@ Proprio come gli antichi Romani invocavano Giano all'inizio di ogni impresa, que
 ## 🎯 Obiettivo del Progetto
 
 Implementare un proxy sicuro che:
+
 - ✅ Emette **token bearer opachi** ai client MCP (non in passthrough)
 - ✅ Implementa i flussi **OAuth 2.0 / OAuth 2.1** con PKCE
 - ✅ Utilizza la **crittografia AEAD** (AES-256-GCM) per la sicurezza dei token
@@ -29,26 +30,29 @@ Implementare un proxy sicuro che:
 ## 📋 Funzionalità
 
 ### Sicurezza
-- **Nessun Passthrough dei Token**: Il proxy emette i propri token, non inoltra mai i token dei client
+
+- **Nessun Passthrough dei Token**: Il proxy emette i propri token opachi, non inoltra mai i token dei client
 - **Crittografia AEAD**: AES-256-GCM per la crittografia dei token opachi
-- **Validazione dell'Audience**: Binding rigoroso dell'audience dei token secondo RFC 8707
-- **Imposizione HTTPS**: Tutti gli endpoint utilizzano HTTPS (eccetto localhost in sviluppo)
-- **Rotazione delle Chiavi**: Supporto per la rotazione delle chiavi crittografiche con tracciamento KID
-- **Token a Breve Durata**: TTL configurabile con default di 15 minuti
-- **Logging Strutturato**: Logging completo senza esposizione di segreti
+- **Integrazione JWT**: Decripta i token opachi per validare i claim JWT
+- **Mappatura dei Claim**: Mappatura configurabile dei claim IdP agli header HTTP
+- **Registrazione Dinamica Client**: Credenziali client crittografate con ID client univoci
+- **HTTPS Pronto**: Pronto per la produzione con supporto TLS (HTTP per lo sviluppo)
 
 ### Conformità OAuth 2.1
-- **Authorization Code + PKCE**: Richiesto per tutti i flussi di autorizzazione
-- **Registrazione Dinamica Client**: Supporto RFC 7591
-- **Discovery del Server di Autorizzazione**: Metadata RFC 8414
-- **Metadata delle Risorse Protette**: Conformità RFC 9728
-- **Indicatori di Risorsa**: RFC 8707 per il binding dei token
+
+- **Authorization Code + PKCE**: Supporto completo per flussi di autorizzazione sicuri
+- **Registrazione Dinamica Client**: Registrazione client conforme a RFC 7591
+- **Metadata delle Risorse Protette**: Conformità RFC 9728 per il discovery delle risorse
+- **Scambio Token**: Scambio sicuro di token con IdP upstream
+- **Supporto Refresh Token**: Endpoint di refresh token implementato
 
 ### Architettura
-- **Go Idiomatico**: Interfacce pulite, gestione degli errori e concorrenza
-- **Design Modulare**: Pacchetti separati per crypto, token, OAuth, MCP
-- **Testabile**: >80% di copertura dei test con test table-driven
-- **Pronto per la Produzione**: Shutdown graduale, health check, pronto per le metriche
+
+- **Framework Gin**: Router HTTP ad alte prestazioni con supporto middleware
+- **Servizi Modulari**: Separazione delle responsabilità con servizi auth, metadata e proxy
+- **Configurazione Guidata**: Configurazione basata su YAML con override delle variabili d'ambiente
+- **Testabile**: Suite di test completa con mock e test table-driven
+- **Pronto per la Produzione**: Shutdown graduale, health check, logging strutturato
 
 ## 🏗️ Architettura
 
@@ -61,10 +65,11 @@ Implementare un proxy sicuro che:
 ┌─────────────────────────────────┐
 │     MCP Proxy Server (Go)       │
 │  ┌──────────────────────────┐   │
-│  │ OAuth Provider           │   │
-│  │ Token Store (rtid→creds) │   │
-│  │ Crypto Service (AEAD)    │   │
-│  │ MCP Client (forwarding)  │   │
+│  │ Gin HTTP Router          │   │
+│  │ - Auth Service           │   │
+│  │ - Metadata Service       │   │
+│  │ - Encryption Utility     │   │
+│  │ - Config Management      │   │
 │  └──────────────────────────┘   │
 └──────┬─────────────┬────────────┘
        │             │ Authorization: Bearer <upstream>
@@ -77,7 +82,8 @@ Implementare un proxy sicuro che:
        │ OAuth 2.1 flow
        ▼
 ┌──────────────────────┐
-│ Authorization Server │
+│   Identity Provider  │
+│  (Server di Autor.)  │
 └──────────────────────┘
 ```
 
@@ -92,201 +98,304 @@ Implementare un proxy sicuro che:
 
 ```bash
 git clone <repository-url>
-cd mcpproxy
-go build -o bin/mcpproxy ./cmd/proxy
+cd mcp-janus
+task install
+task build
 ```
 
 ### Configurazione
 
-Impostare le variabili d'ambiente:
+Creare un file `config.yaml` o impostare variabili d'ambiente:
+
+```yaml
+proxy:
+  base_url: http://localhost:8080
+  listen_addr: ":8080"
+
+idp:
+  issuer_url: https://auth.example.com
+  client_id: mcp-proxy-client
+  client_secret: your-secret-here
+  authorization_endpoint: https://auth.example.com/oauth/authorize
+  token_endpoint: https://auth.example.com/oauth/token
+  claims_mapping:
+    sub: X-Sub
+    name: X-Full-Name
+    email: X-Email
+
+encryption:
+  master_key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+
+upstream:
+  name: my-mcp-server
+  resource: https://mcp.example.com
+  base_url: https://mcp.example.com
+  path_prefix: /mcp
+```
+
+Override delle variabili d'ambiente:
 
 ```bash
-# Obbligatori
-export PROXY_URL="https://proxy.example.com"
-export UPSTREAM_MCP_URL="https://mcp.example.com"
-
-# Opzionali (con valori predefiniti)
-export LISTEN_ADDR=":8443"
-export TLS_CERT_FILE="./certs/cert.pem"
-export TLS_KEY_FILE="./certs/key.pem"
-export OPAQUE_TOKEN_TTL="15m"
-export KEY_STORE_TYPE="memory"  # oppure "file", "kms"
-export LOG_LEVEL="info"         # debug, info, warn, error
-export LOG_FORMAT="json"        # oppure "text"
+export MCP_PROXY_BASE_URL="https://proxy.example.com"
+export MCP_IDP_CLIENT_SECRET="your-secret-here"
 ```
 
 ### Esecuzione
 
 ```bash
-# Sviluppo (HTTP)
-./bin/mcpproxy
+# Sviluppo (HTTP) - usando Task
+task run
 
-# Produzione (HTTPS)
-export TLS_CERT_FILE=/path/to/cert.pem
-export TLS_KEY_FILE=/path/to/key.pem
+# Oppure eseguire direttamente con go
+go run cmd/proxy/main.go
+
+# Produzione - prima compilare
+task build
 ./bin/mcpproxy
 ```
 
 ### Health Check
 
 ```bash
-curl http://localhost:8443/health
-# {"status":"ok"}
+curl http://localhost:8080/health
+# OK
 ```
 
 ## 📖 Endpoint API
 
-### Metadata della Risorsa Protetta (RFC 9728)
+### Endpoint di Discovery
+
+#### Metadata della Risorsa Protetta (RFC 9728)
 
 ```http
 GET /.well-known/oauth-protected-resource
 ```
 
-Risposta:
-```json
+Restituisce i metadata della risorsa proxy con informazioni sul server di autorizzazione.
+
+#### Configurazione OpenID
+
+```http
+GET /.well-known/openid-configuration
+```
+
+Restituisce il documento di discovery OpenID Connect.
+
+### Registrazione Dinamica Client
+
+```http
+POST /register
+Content-Type: application/json
+
 {
-  "resource": "https://proxy.example.com",
-  "authorization_servers": ["https://proxy.example.com/auth"],
-  "bearer_methods_supported": ["header"]
+  "client_name": "My MCP Client",
+  "redirect_uris": ["http://localhost:3000/callback"],
+  "grant_types": ["authorization_code", "refresh_token"],
+  "response_types": ["code"]
 }
 ```
 
-### Autorizzazione OAuth
+Risposta: Credenziali client crittografate con `client_id` e `client_secret`.
+
+### Flusso di Autorizzazione OAuth
+
+#### Endpoint di Autorizzazione
 
 ```http
-POST /auth/authorize
+GET /auth?response_type=code&client_id=<encrypted_id>&redirect_uri=<uri>&state=<state>&code_challenge=<challenge>&code_challenge_method=S256
 ```
 
-Avvia il flusso OAuth con il server di autorizzazione upstream.
+Avvia l'autorizzazione OAuth con l'IdP upstream.
 
-### Callback OAuth
+#### Endpoint di Callback
 
 ```http
-GET /auth/callback?code=<code>&state=<state>
+GET /callback?code=<auth_code>&state=<state>
 ```
 
-Gestisce il callback OAuth e scambia il codice di autorizzazione.
+Gestisce il callback OAuth dall'IdP upstream e restituisce il codice di autorizzazione crittografato al client.
 
-### Endpoint Token
+#### Endpoint Token
 
 ```http
 POST /token
 Content-Type: application/x-www-form-urlencoded
 
-grant_type=authorization_code&code=<code>&redirect_uri=<uri>&client_id=<id>&code_verifier=<verifier>
+grant_type=authorization_code&code=<encrypted_code>&redirect_uri=<uri>&client_id=<encrypted_id>&client_secret=<secret>&code_verifier=<verifier>
 ```
 
 Risposta:
+
 ```json
 {
-  "access_token": "<opaque_token>",
+  "access_token": "<opaque_encrypted_token>",
   "token_type": "Bearer",
-  "expires_in": 900,
-  "refresh_token": "<refresh_token>",
-  "scope": "mcp:read mcp:write"
+  "expires_in": 3600,
+  "refresh_token": "<encrypted_refresh_token>",
+  "scope": "openid profile email"
 }
 ```
+
+#### Endpoint Refresh Token
+
+```http
+POST /refresh
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=refresh_token&refresh_token=<encrypted_refresh_token>&client_id=<encrypted_id>&client_secret=<secret>
+```
+
+Nota: Attualmente restituisce 501 Not Implemented.
 
 ### Proxy MCP
 
 ```http
 GET /mcp/*
-Authorization: Bearer <opaque_token>
+Authorization: Bearer <opaque_encrypted_token>
 ```
 
-Inoltra le richieste autenticate al server MCP upstream.
+Inoltra le richieste autenticate al server MCP upstream con il token reale decrittografato.
 
 ## 🔐 Modello di Sicurezza
 
-### Struttura del Token Opaco
+### Flusso dei Token Opachi
 
-**Payload in Chiaro (prima della crittografia):**
-```json
-{
-  "rtid": "uuid-reference-to-upstream-credentials",
-  "exp": 1698765432,
-  "aud": "https://proxy.example.com",
-  "scp": ["mcp:read", "mcp:write"],
-  "ver": 1,
-  "kid": "key-id-for-rotation"
-}
-```
+1. **Registrazione Client**: Il client si registra e riceve un `client_id` crittografato contenente gli URI di redirect e un segreto generato
+2. **Autorizzazione**: Il client avvia il flusso OAuth, il proxy coordina con l'IdP upstream
+3. **Scambio Token**: Il proxy scambia il codice di autorizzazione con l'IdP, riceve token JWT
+4. **Crittografia**: Il proxy cripta i token JWT usando AES-256-GCM
+5. **Token Opaco**: Il client riceve un token crittografato (opaco per il client, contiene il JWT reale)
+6. **Inoltro Richieste**: Il proxy decripta il token, valida il JWT, inietta il token upstream nelle richieste inoltrate
 
-**Formato Token Crittografato:**
-```
-<base64url(ciphertext)>.<base64url(nonce)>.<base64url(tag)>
+### Struttura del Client ID Crittografato
+
+Il `client_id` restituito durante la registrazione è un payload crittografato contenente:
+
+- URI di redirect
+- Segreto client generato
+- Metadata di registrazione
+
+Questo garantisce che le credenziali del client siano sicure e a prova di manomissione.
+
+### Crittografia dei Token
+
+**Metodo di Crittografia**: AES-256-GCM (AEAD)
+
+**Processo**:
+
+1. Il token JWT reale dall'IdP viene crittografato con la chiave master
+2. Viene generato un nonce per ogni operazione di crittografia
+3. Ciphertext + nonce codificato come base64url
+4. Il client riceve la stringa del token opaco
+
+**Decrittografia & Validazione**:
+
+1. Estrazione del bearer token dall'header `Authorization`
+2. Decrittografia usando la chiave master
+3. Parsing e validazione dei claim JWT
+4. Mappatura dei claim agli header HTTP secondo la configurazione
+5. Inoltro della richiesta con il token reale
+
+### Mappatura dei Claim
+
+Il proxy supporta la mappatura dei claim JWT dell'IdP agli header HTTP per il consumo upstream:
+
+```yaml
+idp:
+  claims_mapping:
+    sub: X-Sub
+    name: X-Full-Name
+    email: X-Email
+    upn: X-UPN
 ```
 
 ### Principi Chiave di Sicurezza
 
-1. **Nessun Passthrough dei Token**: Il proxy non inoltra mai i token dei client a upstream
-2. **Binding dell'Audience**: Tutti i token sono validati per l'audience corretta
-3. **Crittografia AEAD**: AES-256-GCM con autenticazione
-4. **Rotazione delle Chiavi**: Supporto per più chiavi attive tramite KID
-5. **TTL Brevi**: Durata predefinita del token di 15 minuti
-6. **Solo HTTPS**: Tutto il traffico di produzione su TLS
+1. **Nessun Passthrough dei Token**: Il client non vede né usa mai i token IdP reali
+2. **Archiviazione Crittografata**: Tutti i token sensibili crittografati a riposo e in transito
+3. **Validazione JWT**: Validazione JWT completa prima di inoltrare le richieste
+4. **Claim Configurabili**: Mappatura flessibile claim-to-header
+5. **HTTPS Pronto**: Il deployment di produzione dovrebbe usare TLS
+6. **Sicurezza della Chiave Master**: Memorizzare la chiave master in modo sicuro (variabili d'ambiente, secrets manager)
 
 ## 🧪 Testing
 
 ### Eseguire Tutti i Test
 
 ```bash
+task test
+# oppure
 go test ./... -v
 ```
 
 ### Eseguire i Test con Copertura
 
 ```bash
-go test ./... -coverprofile=coverage.out
-go tool cover -html=coverage.out
+task coverage
+# Apre il report di copertura HTML nel browser
 ```
 
 ### Eseguire Test di Pacchetti Specifici
 
 ```bash
-go test ./internal/crypto/... -v
-go test ./internal/tokens/... -v
-go test ./internal/oauth/... -v
+go test ./internal/service/auth/... -v
+go test ./internal/utility/... -v
+go test ./internal/infrastructure/wire/... -v
 ```
+
+### Test di Integrazione con il Server di Test
+
+Il progetto include un server MCP di test per il testing end-to-end:
+
+```bash
+# Terminale 1: Avviare il server MCP di test
+task run-testserver
+
+# Terminale 2: Avviare il proxy
+task run
+
+# Terminale 3: Eseguire i test di integrazione
+task test-testserver
+```
+
+Vedere [Testing Guide](docs/testing-guide.md) per la documentazione dettagliata sui test.
 
 ## 📁 Struttura del Progetto
 
-```
-mcpproxy/
+```text
+mcp-janus/
 ├── cmd/
-│   └── proxy/
-│       └── main.go              # Punto di ingresso
+│   ├── proxy/
+│   │   └── main.go              # Punto di ingresso del proxy server
+│   └── mcpserver/
+│       └── main.go              # Server MCP di test
 ├── internal/
-│   ├── config/
-│   │   └── config.go            # Gestione della configurazione
-│   ├── crypto/
-│   │   ├── service.go           # Servizio di crittografia AEAD
-│   │   ├── keystore.go          # Gestione delle chiavi
-│   │   └── service_test.go      # Test di crittografia
-│   ├── oauth/
-│   │   └── provider.go          # Flussi OAuth 2.1
-│   ├── tokens/
-│   │   ├── store.go             # Archiviazione dei token
-│   │   ├── opaque.go            # Servizio token opachi
-│   │   └── opaque_test.go       # Test dei token
-│   └── mcp/
-│       └── client.go            # Inoltro MCP
-├── pkg/
-│   └── http/
-│       ├── server.go            # Server HTTP e handler
-│       └── middleware.go        # Logging, imposizione HTTPS
+│   ├── infrastructure/
+│   │   ├── config/
+│   │   │   └── config.go        # Configurazione basata su YAML
+│   │   └── wire/
+│   │       └── gin.go           # Setup router Gin & handler
+│   ├── server/
+│   │   └── proxy.go             # Middleware auth & logica proxy
+│   ├── service/
+│   │   ├── auth/
+│   │   │   ├── service.go       # Interfaccia servizio auth
+│   │   │   ├── impl.go          # Implementazione auth
+│   │   │   └── types.go         # Tipi request/response auth
+│   │   └── metadata/
+│   │       └── metadata.go      # RFC 9728 & metadata OpenID
+│   └── utility/
+│       └── encryption.go        # Servizio crittografia AES-GCM
 ├── docs/
-│   ├── mcp-auth-notes.md        # Riassunto delle specifiche MCP
-│   └── design.md                # Documento di design
-├── scripts/
-│   ├── gen-keys/
-│   │   └── main.go              # Utility di generazione chiavi
-│   └── rotate-keys/
-│       └── main.go              # Utility di rotazione chiavi
+│   ├── mcp-auth-notes.md        # Riassunto specifiche MCP
+│   ├── design.md                # Documentazione architettura
+│   ├── auth-flow.md             # Diagrammi di flusso
+│   └── testing-guide.md         # Documentazione testing
+├── config.yaml                  # File di configurazione
+├── Taskfile.yaml                # Comandi task runner
 ├── go.mod
 ├── go.sum
-├── README.md                    # Questo file
-└── SECURITY.md                  # Documentazione sulla sicurezza
+└── README.md                    # Questo file
 ```
 
 ## 🔧 Sviluppo
@@ -296,52 +405,71 @@ mcpproxy/
 Questo progetto segue le convenzioni idiomatiche di Go:
 
 - `gofmt` per la formattazione
-- `golangci-lint` per il linting
+- `golangci-lint` per il linting (quando disponibile)
 - Test table-driven
-- Errori wrappati con contesto
-- Logging strutturato (log/slog)
+- Gestione strutturata degli errori
+- Chiara separazione delle responsabilità
+
+### Comandi Task Disponibili
+
+Visualizzare tutti i comandi disponibili:
+
+```bash
+task --list
+```
+
+Comandi principali:
+
+- `task build` - Compilare il proxy server
+- `task run` - Eseguire il proxy in modalità sviluppo
+- `task test` - Eseguire tutti i test
+- `task coverage` - Generare report di copertura
+- `task lint` - Eseguire il linter (se golangci-lint è installato)
+- `task fmt` - Formattare il codice
+- `task build-testserver` - Compilare il server MCP di test
+- `task run-testserver` - Eseguire il server MCP di test
 
 ### Aggiunta di Nuove Funzionalità
 
-1. Definire le interfacce nel pacchetto `internal/` appropriato
-2. Implementare con pattern idiomatici Go
-3. Aggiungere test completi (copertura >80%)
-4. Aggiornare la documentazione
-5. Assicurarsi che `golangci-lint` passi
+1. Aggiornare la configurazione in `internal/infrastructure/config/config.go`
+2. Definire le interfacce dei servizi in `internal/service/*/service.go`
+3. Implementare i servizi in `internal/service/*/impl.go`
+4. Collegare i servizi in `internal/infrastructure/wire/gin.go`
+5. Aggiungere test completi con pattern table-driven
+6. Aggiornare la documentazione
 
-### Gestione delle Chiavi
+### Gestione delle Chiavi di Crittografia
 
-Generare una nuova chiave di crittografia:
-
-```bash
-go run scripts/gen-keys/main.go
-# oppure usando Makefile
-make gen-keys
-```
-
-Ruotare le chiavi:
+Generare una nuova chiave master:
 
 ```bash
-go run scripts/rotate-keys/main.go
-# oppure usando Makefile
-make rotate-keys
+# Generare una chiave hex di 32 byte (256-bit)
+openssl rand -hex 32
 ```
+
+Configurare in `config.yaml` o tramite variabile d'ambiente `MCP_ENCRYPTION_MASTER_KEY`.
 
 ## 🛡️ Modello delle Minacce
 
 ### Protetto Contro
 
-- ✅ Attacchi di passthrough dei token
-- ✅ Attacchi di replay dei token (tramite scadenza)
-- ✅ Manomissione dei token (tramite autenticazione AEAD)
-- ✅ Confusione dell'audience (tramite validazione rigorosa)
-- ✅ Man-in-the-middle (tramite imposizione HTTPS)
-- ✅ Compromissione delle chiavi (tramite supporto alla rotazione)
-- ✅ Session hijacking (tramite autenticazione basata solo su token)
+- ✅ Attacchi di passthrough dei token (il proxy emette i propri token)
+- ✅ Manomissione dei token (crittografia AEAD con autenticazione)
+- ✅ Accesso non autorizzato (OAuth 2.1 con PKCE)
+- ✅ Esposizione delle credenziali (ID client e token crittografati)
+- ✅ Man-in-the-middle (supporto HTTPS per produzione)
+- ✅ Replay dei token (validazione scadenza JWT)
 
-### Vettori di Attacco Mitigati
+### Best Practice di Sicurezza
 
-Vedere [SECURITY.md](./SECURITY.md) per un'analisi dettagliata delle minacce.
+- Memorizzare la chiave master di crittografia in modo sicuro (secrets manager, variabili d'ambiente)
+- Usare HTTPS in produzione
+- Ruotare le chiavi di crittografia periodicamente
+- Monitorare e registrare gli eventi di autenticazione
+- Mantenere sicure le credenziali IdP
+- Audit di sicurezza regolari delle dipendenze
+
+Vedere la documentazione in `docs/` per informazioni dettagliate sulla sicurezza.
 
 ## 📚 Riferimenti
 
@@ -361,41 +489,36 @@ Vedere [SECURITY.md](./SECURITY.md) per un'analisi dettagliata delle minacce.
 ## 🤝 Contribuire
 
 1. Seguire le best practice di Go e le convenzioni del progetto
-2. Aggiungere test per tutte le nuove funzionalità
-3. Aggiornare la documentazione
-4. Assicurarsi che tutti i test passino: `go test ./...`
-5. Eseguire il linter: `golangci-lint run`
-
-## 📄 Licenza
-
-[Aggiungere la propria licenza qui]
+2. Usare `task fmt` per formattare il codice prima del commit
+3. Aggiungere test per tutte le nuove funzionalità
+4. Aggiornare la documentazione secondo necessità
+5. Assicurarsi che tutti i test passino: `task test`
 
 ## 🙋 Supporto
 
 Per problemi e domande:
 
-- Consultare [SECURITY.md](./SECURITY.md) per questioni di sicurezza
 - Controllare [docs/](./docs/) per la documentazione dettagliata
+- Consultare [Testing Guide](docs/testing-guide.md) per aiuto sui test
 - Aprire una issue per bug o richieste di funzionalità
 
 ## ✅ Stato di Implementazione
 
 - [x] Modulo Go inizializzato
-- [x] Gestione della configurazione (variabili d'ambiente)
+- [x] Configurazione basata su YAML con override delle variabili d'ambiente
 - [x] Crittografia AEAD (AES-256-GCM)
-- [x] Supporto alla rotazione delle chiavi
-- [x] Generazione/validazione token opachi
-- [x] Archiviazione token (in-memory + file)
-- [x] Interfacce provider OAuth
-- [x] Client di inoltro MCP
-- [x] Server HTTP con middleware
-- [x] Imposizione HTTPS
-- [x] Logging strutturato (senza segreti)
-- [x] Shutdown graduale
-- [x] Test completi (copertura >80%)
-- [x] Documentazione (README, SECURITY, design)
-- [x] Script di generazione chiavi
-- [x] Script di rotazione chiavi
-- [ ] Implementazione rate limiting
-- [ ] Handler completi del flusso OAuth
+- [x] Generazione token opachi con crittografia JWT
+- [x] Registrazione dinamica client con credenziali crittografate
+- [x] Flusso authorization code OAuth con PKCE
+- [x] Scambio e validazione token
+- [x] Inoltro richieste MCP con middleware auth
+- [x] Mappatura claim agli header HTTP
+- [x] Server HTTP basato su Gin con shutdown graduale
+- [x] Suite di test completa
+- [x] Documentazione (README, documenti design, diagrammi di flusso)
+- [x] Task runner per operazioni comuni
+- [x] Server MCP di test per testing di integrazione
+- [ ] Implementazione refresh token
+- [ ] Rate limiting
+- [ ] Monitoraggio avanzato e metriche
 - [ ] Specifica OpenAPI

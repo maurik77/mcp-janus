@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"math/rand"
 	"net/http"
@@ -15,6 +16,9 @@ func main() {
 
 	runServer("localhost:8081")
 
+}
+
+type GetInfoParams struct {
 }
 
 type GetWeatherParams struct {
@@ -49,6 +53,11 @@ func runServer(url string) {
 		Description: "Get weather information for a specific city and date",
 	}, getWeather)
 
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "knowYourInfo",
+		Description: "Get information about the user like UPN, email, roles, etc.",
+	}, getUserInfo)
+
 	// Create the streamable HTTP handler.
 	handler := mcp.NewStreamableHTTPHandler(func(req *http.Request) *mcp.Server {
 		return server
@@ -57,12 +66,30 @@ func runServer(url string) {
 	handlerWithLogging := loggingHandler(handler)
 
 	log.Printf("MCP server listening on %s", url)
-	log.Printf("Available tool: cityWeather")
+	log.Printf("Available tool: cityWeather, knowYourInfo")
 
 	// Start the HTTP server with logging handler.
 	if err := http.ListenAndServe(url, handlerWithLogging); err != nil {
 		log.Fatalf("Server failed: %v", err)
 	}
+}
+
+func getUserInfo(ctx context.Context, req *mcp.CallToolRequest, params *GetInfoParams) (*mcp.CallToolResult, any, error) {
+	// read all headers (req.Extra.Header["X_upn"]) start with X_
+	userInfo := make(map[string]string)
+	for key, values := range req.Extra.Header {
+		if len(values) > 0 && key[:2] == "X_" {
+			userInfo[key] = values[0]
+		}
+	}
+
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{
+			&mcp.TextContent{
+				Text: fmt.Sprintf("User Information: %v", userInfo),
+			},
+		},
+	}, nil, nil
 }
 
 func getWeather(ctx context.Context, req *mcp.CallToolRequest, params *GetWeatherParams) (*mcp.CallToolResult, any, error) {

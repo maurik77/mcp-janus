@@ -29,26 +29,29 @@ Implement a secure proxy that:
 ## 📋 Features
 
 ### Security
-- **No Token Passthrough**: Proxy issues its own tokens, never forwards client tokens
+
+- **No Token Passthrough**: Proxy issues its own opaque tokens, never forwards client tokens
 - **AEAD Encryption**: AES-256-GCM for opaque token encryption
-- **Audience Validation**: Strict token audience binding per RFC 8707
-- **HTTPS Enforcement**: All endpoints use HTTPS (except localhost in dev)
-- **Key Rotation**: Support for cryptographic key rotation with KID tracking
-- **Short-lived Tokens**: Configurable TTL with 15-minute default
-- **Structured Logging**: Comprehensive logging with no secret exposure
+- **JWT Integration**: Decrypts opaque tokens to validate JWT claims
+- **Claims Mapping**: Configurable mapping of IdP claims to HTTP headers
+- **Dynamic Client Registration**: Encrypted client credentials with unique client IDs
+- **HTTPS Ready**: Production-ready with TLS support (HTTP for development)
 
 ### OAuth 2.1 Compliance
-- **Authorization Code + PKCE**: Required for all authorization flows
-- **Dynamic Client Registration**: RFC 7591 support
-- **Authorization Server Discovery**: RFC 8414 metadata
-- **Protected Resource Metadata**: RFC 9728 compliance
-- **Resource Indicators**: RFC 8707 for token binding
+
+- **Authorization Code + PKCE**: Full support for secure authorization flows
+- **Dynamic Client Registration**: RFC 7591 compliant client registration
+- **Protected Resource Metadata**: RFC 9728 compliance for resource discovery
+- **Token Exchange**: Secure token exchange with upstream IdP
+- **Refresh Token Support**: Token refresh endpoint implemented
 
 ### Architecture
-- **Idiomatic Go**: Clean interfaces, error handling, and concurrency
-- **Modular Design**: Separate packages for crypto, tokens, OAuth, MCP
-- **Testable**: >80% test coverage with table-driven tests
-- **Production-Ready**: Graceful shutdown, health checks, metrics-ready
+
+- **Gin Framework**: High-performance HTTP router with middleware support
+- **Modular Services**: Separation of concerns with auth, metadata, and proxy services
+- **Configuration-Driven**: YAML-based configuration with environment variable overrides
+- **Testable**: Comprehensive test suite with mocks and table-driven tests
+- **Production-Ready**: Graceful shutdown, health checks, structured logging
 
 ## 🏗️ Architecture
 
@@ -61,10 +64,11 @@ Implement a secure proxy that:
 ┌─────────────────────────────────┐
 │     MCP Proxy Server (Go)       │
 │  ┌──────────────────────────┐   │
-│  │ OAuth Provider           │   │
-│  │ Token Store (rtid→creds) │   │
-│  │ Crypto Service (AEAD)    │   │
-│  │ MCP Client (forwarding)  │   │
+│  │ Gin HTTP Router          │   │
+│  │ - Auth Service           │   │
+│  │ - Metadata Service       │   │
+│  │ - Encryption Utility     │   │
+│  │ - Config Management      │   │
 │  └──────────────────────────┘   │
 └──────┬─────────────┬────────────┘
        │             │ Authorization: Bearer <upstream>
@@ -77,7 +81,8 @@ Implement a secure proxy that:
        │ OAuth 2.1 flow
        ▼
 ┌──────────────────────┐
-│ Authorization Server │
+│   Identity Provider  │
+│ (Authorization Svr)  │
 └──────────────────────┘
 ```
 
@@ -92,46 +97,67 @@ Implement a secure proxy that:
 
 ```bash
 git clone <repository-url>
-cd mcpproxy
-go build -o bin/mcpproxy ./cmd/proxy
+cd mcp-janus
+task install
+task build
 ```
 
 ### Configuration
 
-Set environment variables:
+Create a `config.yaml` file or set environment variables:
+
+```yaml
+proxy:
+  base_url: http://localhost:8080
+  listen_addr: ":8080"
+
+idp:
+  issuer_url: https://auth.example.com
+  client_id: mcp-proxy-client
+  client_secret: your-secret-here
+  authorization_endpoint: https://auth.example.com/oauth/authorize
+  token_endpoint: https://auth.example.com/oauth/token
+  claims_mapping:
+    sub: X-Sub
+    name: X-Full-Name
+    email: X-Email
+
+encryption:
+  master_key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+
+upstream:
+  name: my-mcp-server
+  resource: https://mcp.example.com
+  base_url: https://mcp.example.com
+  path_prefix: /mcp
+```
+
+Environment variable overrides:
 
 ```bash
-# Required
-export PROXY_URL="https://proxy.example.com"
-export UPSTREAM_MCP_URL="https://mcp.example.com"
-
-# Optional (with defaults)
-export LISTEN_ADDR=":8443"
-export TLS_CERT_FILE="./certs/cert.pem"
-export TLS_KEY_FILE="./certs/key.pem"
-export OPAQUE_TOKEN_TTL="15m"
-export KEY_STORE_TYPE="memory"  # or "file", "kms"
-export LOG_LEVEL="info"         # debug, info, warn, error
-export LOG_FORMAT="json"        # or "text"
+export MCP_PROXY_BASE_URL="https://proxy.example.com"
+export MCP_IDP_CLIENT_SECRET="your-secret-here"
 ```
 
 ### Running
 
 ```bash
-# Development (HTTP)
-./bin/mcpproxy
+# Development (HTTP) - using Task
+task run
 
-# Production (HTTPS)
-export TLS_CERT_FILE=/path/to/cert.pem
-export TLS_KEY_FILE=/path/to/key.pem
+# Or run directly with go
+go run cmd/proxy/main.go
+
+# Production - build first
+task build
 ./bin/mcpproxy
 ```
 
 ### Health Check
 
 ```bash
-curl http://localhost:8443/health
-# {"status":"ok"}
+curl http://localhost:8080/health
+# OK
 ```
 
 ## 🧪 Testing with the Test Server
@@ -166,157 +192,239 @@ See [Testing Guide](docs/testing-guide.md) and [Test Server README](cmd/mcpserve
 
 ## 📖 API Endpoints
 
-### Protected Resource Metadata (RFC 9728)
+### Discovery Endpoints
+
+#### Protected Resource Metadata (RFC 9728)
 
 ```http
 GET /.well-known/oauth-protected-resource
 ```
 
-Response:
-```json
+Returns proxy resource metadata with authorization server information.
+
+#### OpenID Configuration
+
+```http
+GET /.well-known/openid-configuration
+```
+
+Returns OpenID Connect discovery document.
+
+### Dynamic Client Registration
+
+```http
+POST /register
+Content-Type: application/json
+
 {
-  "resource": "https://proxy.example.com",
-  "authorization_servers": ["https://proxy.example.com/auth"],
-  "bearer_methods_supported": ["header"]
+  "client_name": "My MCP Client",
+  "redirect_uris": ["http://localhost:3000/callback"],
+  "grant_types": ["authorization_code", "refresh_token"],
+  "response_types": ["code"]
 }
 ```
 
-### OAuth Authorization
+Response: Encrypted client credentials with `client_id` and `client_secret`.
+
+### OAuth Authorization Flow
+
+#### Authorization Endpoint
 
 ```http
-POST /auth/authorize
+GET /auth?response_type=code&client_id=<encrypted_id>&redirect_uri=<uri>&state=<state>&code_challenge=<challenge>&code_challenge_method=S256
 ```
 
-Initiates OAuth flow with upstream authorization server.
+Initiates OAuth authorization with upstream IdP.
 
-### OAuth Callback
+#### Callback Endpoint
 
 ```http
-GET /auth/callback?code=<code>&state=<state>
+GET /callback?code=<auth_code>&state=<state>
 ```
 
-Handles OAuth callback and exchanges authorization code.
+Handles OAuth callback from upstream IdP and returns encrypted authorization code to client.
 
-### Token Endpoint
+#### Token Endpoint
 
 ```http
 POST /token
 Content-Type: application/x-www-form-urlencoded
 
-grant_type=authorization_code&code=<code>&redirect_uri=<uri>&client_id=<id>&code_verifier=<verifier>
+grant_type=authorization_code&code=<encrypted_code>&redirect_uri=<uri>&client_id=<encrypted_id>&client_secret=<secret>&code_verifier=<verifier>
 ```
 
 Response:
+
 ```json
 {
-  "access_token": "<opaque_token>",
+  "access_token": "<opaque_encrypted_token>",
   "token_type": "Bearer",
-  "expires_in": 900,
-  "refresh_token": "<refresh_token>",
-  "scope": "mcp:read mcp:write"
+  "expires_in": 3600,
+  "refresh_token": "<encrypted_refresh_token>",
+  "scope": "openid profile email"
 }
 ```
+
+#### Refresh Token Endpoint
+
+```http
+POST /refresh
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=refresh_token&refresh_token=<encrypted_refresh_token>&client_id=<encrypted_id>&client_secret=<secret>
+```
+
+Note: Currently returns 501 Not Implemented.
 
 ### MCP Proxy
 
 ```http
 GET /mcp/*
-Authorization: Bearer <opaque_token>
+Authorization: Bearer <opaque_encrypted_token>
 ```
 
-Forwards authenticated requests to upstream MCP server.
+Forwards authenticated requests to upstream MCP server with decrypted real token.
 
 ## 🔐 Security Model
 
-### Opaque Token Structure
+### Opaque Token Flow
 
-**Plaintext Payload (before encryption):**
-```json
-{
-  "rtid": "uuid-reference-to-upstream-credentials",
-  "exp": 1698765432,
-  "aud": "https://proxy.example.com",
-  "scp": ["mcp:read", "mcp:write"],
-  "ver": 1,
-  "kid": "key-id-for-rotation"
-}
-```
+1. **Client Registration**: Client registers and receives encrypted `client_id` containing redirect URIs and a generated secret
+2. **Authorization**: Client initiates OAuth flow, proxy coordinates with upstream IdP
+3. **Token Exchange**: Proxy exchanges authorization code with IdP, receives JWT tokens
+4. **Encryption**: Proxy encrypts JWT tokens using AES-256-GCM
+5. **Opaque Token**: Client receives encrypted token (opaque to client, contains real JWT)
+6. **Request Forwarding**: Proxy decrypts token, validates JWT, injects upstream token into forwarded requests
 
-**Encrypted Token Format:**
-```
-<base64url(ciphertext)>.<base64url(nonce)>.<base64url(tag)>
+### Encrypted Client ID Structure
+
+The `client_id` returned during registration is an encrypted payload containing:
+
+- Redirect URIs
+- Generated client secret
+- Registration metadata
+
+This ensures client credentials are secured and tamper-proof.
+
+### Token Encryption
+
+**Encryption Method**: AES-256-GCM (AEAD)
+
+**Process**:
+
+1. Real JWT token from IdP encrypted with master key
+2. Nonce generated for each encryption operation
+3. Ciphertext + nonce encoded as base64url
+4. Client receives opaque token string
+
+**Decryption & Validation**:
+
+1. Extract bearer token from `Authorization` header
+2. Decrypt using master key
+3. Parse and validate JWT claims
+4. Map claims to HTTP headers per configuration
+5. Forward request with real token
+
+### Claims Mapping
+
+The proxy supports mapping IdP JWT claims to HTTP headers for upstream consumption:
+
+```yaml
+idp:
+  claims_mapping:
+    sub: X-Sub
+    name: X-Full-Name
+    email: X-Email
+    upn: X-UPN
 ```
 
 ### Key Security Principles
 
-1. **No Token Passthrough**: Proxy never forwards client tokens to upstream
-2. **Audience Binding**: All tokens validated for correct audience
-3. **AEAD Encryption**: AES-256-GCM with authentication
-4. **Key Rotation**: Support for multiple active keys via KID
-5. **Short TTLs**: Default 15-minute token lifetime
-6. **HTTPS Only**: All production traffic over TLS
+1. **No Token Passthrough**: Client never sees or uses real IdP tokens
+2. **Encrypted Storage**: All sensitive tokens encrypted at rest and in transit
+3. **JWT Validation**: Full JWT validation before forwarding requests
+4. **Configurable Claims**: Flexible claim-to-header mapping
+5. **HTTPS Ready**: Production deployment should use TLS
+6. **Master Key Security**: Store master key securely (environment variables, secrets manager)
 
 ## 🧪 Testing
 
 ### Run All Tests
 
 ```bash
+task test
+# or
 go test ./... -v
 ```
 
 ### Run Tests with Coverage
 
 ```bash
-go test ./... -coverprofile=coverage.out
-go tool cover -html=coverage.out
+task coverage
+# Opens HTML coverage report in browser
 ```
 
 ### Run Specific Package Tests
 
 ```bash
-go test ./internal/crypto/... -v
-go test ./internal/tokens/... -v
-go test ./internal/oauth/... -v
+go test ./internal/service/auth/... -v
+go test ./internal/utility/... -v
+go test ./internal/infrastructure/wire/... -v
 ```
+
+### Integration Testing with Test Server
+
+The project includes a test MCP server for end-to-end testing:
+
+```bash
+# Terminal 1: Start test MCP server
+task run-testserver
+
+# Terminal 2: Start proxy
+task run
+
+# Terminal 3: Run integration tests
+task test-testserver
+```
+
+See [Testing Guide](docs/testing-guide.md) for detailed testing documentation.
 
 ## 📁 Project Structure
 
-```
-mcpproxy/
+```text
+mcp-janus/
 ├── cmd/
-│   └── proxy/
-│       └── main.go              # Entry point
+│   ├── proxy/
+│   │   └── main.go              # Proxy server entry point
+│   └── mcpserver/
+│       └── main.go              # Test MCP server
 ├── internal/
-│   ├── config/
-│   │   └── config.go            # Configuration management
-│   ├── crypto/
-│   │   ├── service.go           # AEAD encryption service
-│   │   ├── keystore.go          # Key management
-│   │   └── service_test.go      # Crypto tests
-│   ├── oauth/
-│   │   └── provider.go          # OAuth 2.1 flows
-│   ├── tokens/
-│   │   ├── store.go             # Token storage
-│   │   ├── opaque.go            # Opaque token service
-│   │   └── opaque_test.go       # Token tests
-│   └── mcp/
-│       └── client.go            # MCP forwarding
-├── pkg/
-│   └── http/
-│       ├── server.go            # HTTP server & handlers
-│       └── middleware.go        # Logging, HTTPS enforcement
+│   ├── infrastructure/
+│   │   ├── config/
+│   │   │   └── config.go        # YAML-based configuration
+│   │   └── wire/
+│   │       └── gin.go           # Gin router setup & handlers
+│   ├── server/
+│   │   └── proxy.go             # Auth middleware & proxy logic
+│   ├── service/
+│   │   ├── auth/
+│   │   │   ├── service.go       # Auth service interface
+│   │   │   ├── impl.go          # Auth implementation
+│   │   │   └── types.go         # Auth request/response types
+│   │   └── metadata/
+│   │       └── metadata.go      # RFC 9728 & OpenID metadata
+│   └── utility/
+│       └── encryption.go        # AES-GCM encryption service
 ├── docs/
 │   ├── mcp-auth-notes.md        # MCP spec summary
-│   └── design.md                # Design document
-├── scripts/
-│   ├── gen-keys/
-│   │   └── main.go              # Key generation utility
-│   └── rotate-keys/
-│       └── main.go              # Key rotation utility
+│   ├── design.md                # Architecture documentation
+│   ├── auth-flow.md             # Flow diagrams
+│   └── testing-guide.md         # Testing documentation
+├── config.yaml                  # Configuration file
+├── Taskfile.yaml                # Task runner commands
 ├── go.mod
 ├── go.sum
-├── README.md                    # This file
-└── SECURITY.md                  # Security documentation
+└── README.md                    # This file
 ```
 
 ## 🔧 Development
@@ -326,58 +434,81 @@ mcpproxy/
 This project follows idiomatic Go conventions:
 
 - `gofmt` for formatting
-- `golangci-lint` for linting
+- `golangci-lint` for linting (when available)
 - Table-driven tests
-- Wrapped errors with context
-- Structured logging (log/slog)
+- Structured error handling
+- Clear separation of concerns
+
+### Available Task Commands
+
+View all available commands:
+
+```bash
+task --list
+```
+
+Key commands:
+
+- `task build` - Build the proxy server
+- `task run` - Run the proxy in development mode
+- `task test` - Run all tests
+- `task coverage` - Generate coverage report
+- `task lint` - Run linter (if golangci-lint installed)
+- `task fmt` - Format code
+- `task build-testserver` - Build test MCP server
+- `task run-testserver` - Run test MCP server
 
 ### Adding New Features
 
-1. Define interfaces in appropriate `internal/` package
-2. Implement with idiomatic Go patterns
-3. Add comprehensive tests (>80% coverage)
-4. Update documentation
-5. Ensure `golangci-lint` passes
+1. Update configuration in `internal/infrastructure/config/config.go`
+2. Define service interfaces in `internal/service/*/service.go`
+3. Implement services in `internal/service/*/impl.go`
+4. Wire services in `internal/infrastructure/wire/gin.go`
+5. Add comprehensive tests with table-driven patterns
+6. Update documentation
 
-### Key Management
+### Encryption Key Management
 
-Generate new encryption key:
+Generate a new master key:
+
 ```bash
-go run scripts/gen-keys/main.go
-# or using Makefile
-make gen-keys
+# Generate 32-byte (256-bit) hex key
+openssl rand -hex 32
 ```
 
-Rotate keys:
-```bash
-go run scripts/rotate-keys/main.go
-# or using Makefile
-make rotate-keys
-```
+Configure in `config.yaml` or via environment variable `MCP_ENCRYPTION_MASTER_KEY`.
 
 ## 🛡️ Threat Model
 
 ### Protected Against
 
-- ✅ Token passthrough attacks
-- ✅ Token replay attacks (via expiry)
-- ✅ Token tampering (via AEAD authentication)
-- ✅ Audience confusion (via strict validation)
-- ✅ Man-in-the-middle (via HTTPS enforcement)
-- ✅ Key compromise (via rotation support)
-- ✅ Session hijacking (via token-based auth only)
+- ✅ Token passthrough attacks (proxy issues its own tokens)
+- ✅ Token tampering (AEAD encryption with authentication)
+- ✅ Unauthorized access (OAuth 2.1 with PKCE)
+- ✅ Credential exposure (encrypted client IDs and tokens)
+- ✅ Man-in-the-middle (HTTPS support for production)
+- ✅ Token replay (JWT expiration validation)
 
-### Attack Vectors Mitigated
+### Security Best Practices
 
-See [SECURITY.md](./SECURITY.md) for detailed threat analysis.
+- Store master encryption key securely (secrets manager, environment variables)
+- Use HTTPS in production
+- Rotate encryption keys periodically
+- Monitor and log authentication events
+- Keep IdP credentials secure
+- Regular security audits of dependencies
+
+See documentation in `docs/` for detailed security information.
 
 ## 📚 References
 
 ### MCP Specifications
+
 - [MCP Authorization (2025-06-18)](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization)
 - [MCP Security Best Practices (2025-06-18)](https://modelcontextprotocol.io/specification/2025-06-18/basic/security_best_practices)
 
 ### OAuth Standards
+
 - [OAuth 2.1 (IETF Draft)](https://datatracker.ietf.org/doc/html/draft-ietf-oauth-v2-1-13)
 - [RFC 8414: OAuth 2.0 Authorization Server Metadata](https://datatracker.ietf.org/doc/html/rfc8414)
 - [RFC 7591: OAuth 2.0 Dynamic Client Registration](https://datatracker.ietf.org/doc/html/rfc7591)
@@ -387,40 +518,36 @@ See [SECURITY.md](./SECURITY.md) for detailed threat analysis.
 ## 🤝 Contributing
 
 1. Follow Go best practices and project conventions
-2. Add tests for all new functionality
-3. Update documentation
-4. Ensure all tests pass: `go test ./...`
-5. Run linter: `golangci-lint run`
-
-## 📄 License
-
-[Add your license here]
+2. Use `task fmt` to format code before committing
+3. Add tests for all new functionality
+4. Update documentation as needed
+5. Ensure all tests pass: `task test`
 
 ## 🙋 Support
 
 For issues and questions:
-- Review [SECURITY.md](./SECURITY.md) for security concerns
+
 - Check [docs/](./docs/) for detailed documentation
+- Review [Testing Guide](docs/testing-guide.md) for testing help
 - Open an issue for bugs or feature requests
 
 ## ✅ Implementation Status
 
 - [x] Go module initialized
-- [x] Configuration management (env vars)
+- [x] YAML-based configuration with environment overrides
 - [x] AEAD encryption (AES-256-GCM)
-- [x] Key rotation support
-- [x] Opaque token generation/validation
-- [x] Token store (in-memory + file)
-- [x] OAuth provider interfaces
-- [x] MCP forwarding client
-- [x] HTTP server with middleware
-- [x] HTTPS enforcement
-- [x] Structured logging (no secrets)
-- [x] Graceful shutdown
-- [x] Comprehensive tests (>80% coverage)
-- [x] Documentation (README, SECURITY, design)
-- [x] Key generation scripts
-- [x] Key rotation scripts
-- [ ] Rate limiting implementation
-- [ ] Complete OAuth flow handlers
+- [x] Opaque token generation with JWT encryption
+- [x] Dynamic client registration with encrypted credentials
+- [x] OAuth authorization code flow with PKCE
+- [x] Token exchange and validation
+- [x] MCP request forwarding with auth middleware
+- [x] Claims mapping to HTTP headers
+- [x] Gin-based HTTP server with graceful shutdown
+- [x] Comprehensive test suite
+- [x] Documentation (README, design docs, flow diagrams)
+- [x] Task runner for common operations
+- [x] Test MCP server for integration testing
+- [ ] Refresh token implementation
+- [ ] Rate limiting
+- [ ] Advanced monitoring and metrics
 - [ ] OpenAPI specification
