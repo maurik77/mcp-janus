@@ -15,13 +15,11 @@ type Upstream struct {
 }
 
 type IDP struct {
-	IssuerURL             string            `mapstructure:"issuer_url"`
-	ClientID              string            `mapstructure:"client_id"`
-	ClientSecret          string            `mapstructure:"client_secret"`
-	AuthorizationEndpoint string            `mapstructure:"authorization_endpoint"`
-	TokenEndpoint         string            `mapstructure:"token_endpoint"`
-	Scopes                []string          `mapstructure:"scopes"`
-	ClaimsMapping         map[string]string `mapstructure:"claims_mapping"`
+	ClientID               string            `mapstructure:"client_id"`
+	ClientSecret           string            `mapstructure:"client_secret"`
+	OpenIDConfigurationURL string            `mapstructure:"openid_configuration_url"`
+	Scopes                 []string          `mapstructure:"scopes"`
+	ClaimsMapping          map[string]string `mapstructure:"claims_mapping"`
 }
 
 type Proxy struct {

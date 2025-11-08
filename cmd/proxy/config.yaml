@@ -3,11 +3,9 @@ proxy:
   listen_addr: ":8080"
 
 idp:
-  issuer_url: https://auth.example.com
   client_id: 379eab96-a9ad-401f-8158-19b130fefbf3
   client_secret: supersecret123
-  authorization_endpoint: https://swelfad01azne.b2clogin.com/swelfad01azne.onmicrosoft.com/b2c_1a_home_realm_discovery/oauth2/v2.0/authorize
-  token_endpoint: https://swelfad01azne.b2clogin.com/swelfad01azne.onmicrosoft.com/b2c_1a_home_realm_discovery/oauth2/v2.0/token
+  openid_configuration_url: https://swelfad01azne.b2clogin.com/swelfad01azne.onmicrosoft.com/v2.0/.well-known/openid-configuration?p=B2C_1A_HOME_REALM_DISCOVERY
   scopes:
     - openid
     - profile

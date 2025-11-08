@@ -3,16 +3,18 @@ proxy:
   listen_addr: ":8080"
 
 idp:
-  issuer_url: https://auth.example.com
-  client_id: mcp-proxy-client
+  client_id: 379eab96-a9ad-401f-8158-19b130fefbf3
   client_secret: supersecret123
-  authorization_endpoint: https://auth.example.com/oauth/authorize
-  token_endpoint: https://auth.example.com/oauth/token
+  openid_configuration_url: https://swelfad01azne.b2clogin.com/swelfad01azne.onmicrosoft.com/v2.0/.well-known/openid-configuration?p=B2C_1A_HOME_REALM_DISCOVERY
+  scopes:
+    - openid
+    - profile
+    - 379eab96-a9ad-401f-8158-19b130fefbf3
   claims_mapping:
     sub: X_sub
     name: X_full_name
     email: X_email
-    upn: X_upn  
+    upn: X_upn
 
 encryption:
   master_key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef

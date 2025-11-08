@@ -51,24 +51,11 @@ func (p *proxy) AuthMiddleware() func(http.Handler) http.Handler {
 				return
 			}
 
-			// Unmarshal data into jwt.Token
-			jwtToken, _, err := new(jwt.Parser).ParseUnverified(string(data), jwt.MapClaims{})
-			if err != nil {
+			jwtToken, err := p.auth.ValidateJWT(string(data))
+			if err != nil || !jwtToken.Valid {
 				http.Error(w, `{"error":"invalid_token"}`, http.StatusUnauthorized)
 				return
 			}
-
-			// var t oauth2.Token
-			// if err := json.Unmarshal(data, &t); err != nil {
-			// 	http.Error(w, `{"error":"invalid_token"}`, http.StatusUnauthorized)
-			// 	return
-			// }
-
-			// Validate expiration
-			// if time.Now().Unix() > t.ExpiresIn {
-			// 	http.Error(w, `{"error":"expired_token"}`, http.StatusUnauthorized)
-			// 	return
-			// }
 
 			// Extract claims
 			claims, ok := jwtToken.Claims.(jwt.MapClaims)
