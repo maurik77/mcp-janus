@@ -97,12 +97,32 @@ tasks:
   run:
     desc: Build and run the proxy server (development mode)
     deps: [build]
+    vars:
+      CLIENT_SECRET:
+        sh: 'bash -c ''read -s -p "Enter MCP_IDP_CLIENT_SECRET: " secret && echo $secret'''
+    platforms: [linux, darwin]
     env:
       PROXY_URL: "http://localhost:8080"
       UPSTREAM_MCP_URL: "http://localhost:8081"
+      MCP_IDP_CLIENT_SECRET: "{{.CLIENT_SECRET}}"
     cmds:
       - echo "Starting MCP proxy server..."
-      - go run {{.BINARY_NAME}}      
+      - go run {{.MAIN_PATH}}
+  
+  run:windows:
+    desc: Build and run the proxy server (development mode - Windows)
+    deps: [build]
+    vars:
+      CLIENT_SECRET:
+        sh: pwsh -Command "Read-Host -Prompt 'Enter MCP_IDP_CLIENT_SECRET' -AsSecureString | ConvertFrom-SecureString -AsPlainText"
+    platforms: [windows]
+    env:
+      PROXY_URL: "http://localhost:8080"
+      UPSTREAM_MCP_URL: "http://localhost:8081"
+      MCP_IDP_CLIENT_SECRET: "{{.CLIENT_SECRET}}"
+    cmds:
+      - echo "Starting MCP proxy server..."
+      - go run {{.MAIN_PATH}}
 
   install:
     desc: Download and verify dependencies
