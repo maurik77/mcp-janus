@@ -7,10 +7,28 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"io"
+	"mcpproxy/internal/infrastructure/config"
 )
 
-func Encrypt(data []byte, key [32]byte) (string, error) {
-	block, err := aes.NewCipher(key[:])
+type Encryption interface {
+	Encrypt(data []byte) (string, error)
+	Decrypt(enc string) ([]byte, error)
+}
+
+type encryption struct {
+	cfg *config.Config
+	key [32]byte
+}
+
+func NewEncryption(cfg *config.Config) (Encryption, error) {
+	return &encryption{
+		cfg: cfg,
+		key: cfg.EncryptionKey(),
+	}, nil
+}
+
+func (e *encryption) Encrypt(data []byte) (string, error) {
+	block, err := aes.NewCipher(e.key[:])
 	if err != nil {
 		return "", err
 	}
@@ -26,12 +44,12 @@ func Encrypt(data []byte, key [32]byte) (string, error) {
 	return base64.URLEncoding.EncodeToString(cipherText), nil
 }
 
-func Decrypt(enc string, key [32]byte) ([]byte, error) {
+func (e *encryption) Decrypt(enc string) ([]byte, error) {
 	data, err := base64.URLEncoding.DecodeString(enc)
 	if err != nil {
 		return nil, err
 	}
-	block, err := aes.NewCipher(key[:])
+	block, err := aes.NewCipher(e.key[:])
 	if err != nil {
 		return nil, err
 	}

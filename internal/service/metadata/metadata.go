@@ -1,7 +1,7 @@
 package metadata
 
 import (
-	"mcpproxy/internal/config"
+	"mcpproxy/internal/infrastructure/config"
 )
 
 type MetadataHandler struct {

@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
-	"mcpproxy/internal/config"
+	"mcpproxy/internal/infrastructure/config"
 	"mcpproxy/internal/utility"
 	"net/url"
 	"slices"
@@ -16,13 +16,10 @@ type ProxyAuthHandler struct {
 	config      config.Config
 	encKey      [32]byte
 	oauthConfig *oauth2.Config
+	encryption  utility.Encryption
 }
 
-func New(cfg config.Config) (Service, error) {
-	var encKey [32]byte
-	keyBytes, _ := hex.DecodeString(cfg.Encryption.MasterKey)
-	copy(encKey[:], keyBytes)
-
+func New(cfg config.Config, encryption utility.Encryption) (Service, error) {
 	oauthConfig := &oauth2.Config{
 		ClientID:     cfg.IDP.ClientID,
 		ClientSecret: cfg.IDP.ClientSecret,
@@ -36,13 +33,14 @@ func New(cfg config.Config) (Service, error) {
 
 	return &ProxyAuthHandler{
 		config:      cfg,
-		encKey:      encKey,
+		encKey:      cfg.EncryptionKey(),
 		oauthConfig: oauthConfig,
+		encryption:  encryption,
 	}, nil
 }
 
 func (s *ProxyAuthHandler) RegisterClient(req *RegisterRequest) (*RegisterResponse, error) {
-	clientId, secret, err := generateClientID(req, s.encKey)
+	clientId, secret, err := generateClientID(req, s.encryption)
 
 	if err != nil {
 		return nil, err
@@ -69,7 +67,7 @@ func (s *ProxyAuthHandler) AuthenticateRequest(req *AuthenticateRequest) (string
 		return "", fmt.Errorf("invalid_request")
 	}
 
-	clientData, err := DecodeClientID(req.ClientID, s.encKey)
+	clientData, err := DecodeClientID(req.ClientID, s.encryption)
 
 	// Decrypt client_id to get redirect_uri
 	if err != nil {
@@ -128,7 +126,7 @@ func (s *ProxyAuthHandler) RetrieveAccessToken(req *AccessTokenRequest) (*oauth2
 		return nil, fmt.Errorf("invalid_request")
 	}
 
-	clientData, err := DecodeClientID(req.ClientID, s.encKey)
+	clientData, err := DecodeClientID(req.ClientID, s.encryption)
 
 	if err != nil {
 		return nil, err
@@ -151,13 +149,13 @@ func (s *ProxyAuthHandler) RetrieveAccessToken(req *AccessTokenRequest) (*oauth2
 	}
 
 	opaqueToken := token
-	opaqueToken.AccessToken, err = utility.Encrypt([]byte(token.AccessToken), s.encKey)
+	opaqueToken.AccessToken, err = s.encryption.Encrypt([]byte(token.AccessToken))
 
 	if err != nil {
 		return nil, err
 	}
 
-	opaqueToken.RefreshToken, err = utility.Encrypt([]byte(token.RefreshToken), s.encKey)
+	opaqueToken.RefreshToken, err = s.encryption.Encrypt([]byte(token.RefreshToken))
 
 	return opaqueToken, err
 }
@@ -166,7 +164,7 @@ func (s *ProxyAuthHandler) RefreshToken(refreshToken string) (*oauth2.Token, err
 	return &oauth2.Token{}, nil
 }
 
-func generateClientID(req *RegisterRequest, key [32]byte) (string, string, error) {
+func generateClientID(req *RegisterRequest, encryption utility.Encryption) (string, string, error) {
 	// For simplicity, we only store redirect_uris in encrypted client_id
 	// Generate a random secret (in real case, should be more robust)
 	secretBytes := make([]byte, 16)
@@ -180,7 +178,7 @@ func generateClientID(req *RegisterRequest, key [32]byte) (string, string, error
 		Secret:       clientSecret,
 	}
 
-	encryptedClientID, err := clientData.Encode(key)
+	encryptedClientID, err := clientData.Encode(encryption)
 
 	return encryptedClientID, clientSecret, err
 }

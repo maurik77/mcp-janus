@@ -21,11 +21,11 @@ type RegisterResponse struct {
 }
 
 type AuthenticateRequest struct {
-	ClientID            string `json:"client_id", form:"client_id"`
-	State               string `json:"state", form:"state"`
-	CodeChallenge       string `json:"code_challenge", form:"code_challenge"`
-	RedirectURI         string `json:"redirect_uri", form:"redirect_uri"`
-	CodeChallengeMethod string `json:"code_challenge_method", form:"code_challenge_method"`
+	ClientID            string `json:"client_id" form:"client_id"`
+	State               string `json:"state" form:"state"`
+	CodeChallenge       string `json:"code_challenge" form:"code_challenge"`
+	RedirectURI         string `json:"redirect_uri" form:"redirect_uri"`
+	CodeChallengeMethod string `json:"code_challenge_method" form:"code_challenge_method"`
 }
 
 type AuthorizationCodeData struct {
@@ -34,11 +34,11 @@ type AuthorizationCodeData struct {
 }
 
 type AccessTokenRequest struct {
-	Code         string `json:"code", form:"code"`
-	RedirectURI  string `json:"redirect_uri", form:"redirect_uri"`
-	ClientSecret string `json:"client_secret", form:"client_secret"`
-	CodeVerifier string `json:"code_verifier", form:"code_verifier"`
-	ClientID     string `json:"client_id", form:"client_id"`
+	Code         string `json:"code" form:"code"`
+	RedirectURI  string `json:"redirect_uri" form:"redirect_uri"`
+	ClientSecret string `json:"client_secret" form:"client_secret"`
+	CodeVerifier string `json:"code_verifier" form:"code_verifier"`
+	ClientID     string `json:"client_id" form:"client_id"`
 }
 
 type ClientIdData struct {
@@ -46,12 +46,12 @@ type ClientIdData struct {
 	Secret       string   `json:"s"`
 }
 
-func (c *ClientIdData) Encode(key [32]byte) (string, error) {
+func (c *ClientIdData) Encode(encryption utility.Encryption) (string, error) {
 	dataJSON, err := json.Marshal(c)
 	if err != nil {
 		return "", err
 	}
-	encrypted, err := utility.Encrypt(dataJSON, key)
+	encrypted, err := encryption.Encrypt(dataJSON)
 	if err != nil {
 		return "", err
 	}
@@ -59,8 +59,8 @@ func (c *ClientIdData) Encode(key [32]byte) (string, error) {
 	return encrypted, nil
 }
 
-func DecodeClientID(encrypted string, key [32]byte) (*ClientIdData, error) {
-	data, err := utility.Decrypt(encrypted, key)
+func DecodeClientID(encrypted string, encryption utility.Encryption) (*ClientIdData, error) {
+	data, err := encryption.Decrypt(encrypted)
 	if err != nil {
 		return nil, err
 	}

@@ -8,8 +8,8 @@ import (
 	"net/url"
 	"strings"
 
-	"mcpproxy/internal/config"
-	"mcpproxy/internal/metadata"
+	"mcpproxy/internal/infrastructure/config"
+	"mcpproxy/internal/service/metadata"
 	"mcpproxy/internal/utility"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -25,7 +25,7 @@ func extractBearerToken(r *http.Request) (string, bool) {
 }
 
 // AuthMiddleware validates opaque_token and injects real token + upstream
-func AuthMiddleware(cfg *config.Config, service metadata.Service, key [32]byte) func(http.Handler) http.Handler {
+func AuthMiddleware(cfg *config.Config, service metadata.Service, encryption utility.Encryption) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			token, ok := extractBearerToken(r)
@@ -36,7 +36,7 @@ func AuthMiddleware(cfg *config.Config, service metadata.Service, key [32]byte) 
 			}
 
 			// Decrypt opaque token
-			data, err := utility.Decrypt(token, key)
+			data, err := encryption.Decrypt(token)
 			if err != nil {
 				http.Error(w, `{"error":"invalid_token"}`, http.StatusUnauthorized)
 				return

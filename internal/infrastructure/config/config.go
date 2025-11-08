@@ -2,6 +2,8 @@
 package config
 
 import (
+	"encoding/hex"
+
 	"github.com/spf13/viper"
 )
 
@@ -34,6 +36,18 @@ type Config struct {
 		MasterKey string `mapstructure:"master_key"`
 	} `mapstructure:"encryption"`
 	Upstream Upstream `mapstructure:"upstream"`
+}
+
+func (c *Config) EncryptionKey() [32]byte {
+	var encKey [32]byte
+
+	if c == nil || c.Encryption.MasterKey == "" {
+		return encKey
+	}
+
+	keyBytes, _ := hex.DecodeString(c.Encryption.MasterKey)
+	copy(encKey[:], keyBytes)
+	return encKey
 }
 
 func Load() (*Config, error) {
