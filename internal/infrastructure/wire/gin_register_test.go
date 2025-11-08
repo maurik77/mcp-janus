@@ -91,7 +91,7 @@ func TestRegisterHandler(t *testing.T) {
 			assert.Equal(t, tt.expectedStatusCode, resp.Code)
 
 			if tt.expectedResponse != nil {
-				assert.Equal(t, "application/json", resp.Header().Get("Content-Type"))
+				assert.Equal(t, "application/json; charset=utf-8", resp.Header().Get("Content-Type"))
 
 				var responseBody auth.RegisterResponse
 				err = json.Unmarshal(resp.Body.Bytes(), &responseBody)

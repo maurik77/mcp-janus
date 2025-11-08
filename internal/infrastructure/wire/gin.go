@@ -74,18 +74,18 @@ func authHandler(authService auth.Service) gin.HandlerFunc {
 		err := c.Bind(req)
 
 		if err != nil {
-			http.Error(c.Writer, `{"error":"invalid_request"}`, http.StatusBadRequest)
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request"})
 			return
 		}
 
 		authURL, err := authService.AuthenticateRequest(req)
 
 		if err != nil {
-			http.Error(c.Writer, `{"error":"server_error"}`, http.StatusInternalServerError)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "server_error"})
 			return
 		}
 
-		http.Redirect(c.Writer, c.Request, authURL, http.StatusFound)
+		c.Redirect(http.StatusFound, authURL)
 	}
 }
 
@@ -96,14 +96,14 @@ func callbackHandler(authService auth.Service) gin.HandlerFunc {
 		err := c.BindQuery(req)
 
 		if err != nil {
-			http.Error(c.Writer, `{"error":"invalid_request"}`, http.StatusBadRequest)
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request"})
 			return
 		}
 
 		authData, redirectURL, err := authService.ManageAuthorizationCode(req)
 
 		if err != nil {
-			http.Error(c.Writer, `{"error":"invalid_request"}`, http.StatusBadRequest)
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request"})
 			return
 		}
 
@@ -112,7 +112,7 @@ func callbackHandler(authService auth.Service) gin.HandlerFunc {
 		query.Set("state", authData.State)
 		redirectURL.RawQuery = query.Encode()
 
-		http.Redirect(c.Writer, c.Request, redirectURL.String(), http.StatusFound)
+		c.Redirect(http.StatusFound, redirectURL.String())
 	}
 }
 
@@ -123,26 +123,25 @@ func tokenHandler(authHandler auth.Service) gin.HandlerFunc {
 		err := c.Bind(req)
 
 		if err != nil {
-			http.Error(c.Writer, `{"error":"invalid_request"}`, http.StatusBadRequest)
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request"})
 			return
 		}
 
 		opaqueToken, err := authHandler.RetrieveAccessToken(req)
 
 		if err != nil {
-			http.Error(c.Writer, `{"error":"server_error"}`, http.StatusInternalServerError)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "server_error"})
 			return
 		}
 
-		c.Writer.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(c.Writer).Encode(opaqueToken)
+		c.JSON(http.StatusOK, opaqueToken)
 	}
 }
 
 // refreshHandler
 func refreshHandler(_ auth.Service) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		http.Error(c.Writer, `{"error":"not_implemented"}`, http.StatusNotImplemented)
+		c.JSON(http.StatusNotImplemented, gin.H{"error": "not_implemented"})
 	}
 }
 
@@ -150,19 +149,18 @@ func registerHandler(authHandler auth.Service) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		req := &auth.RegisterRequest{}
 		if err := json.NewDecoder(c.Request.Body).Decode(req); err != nil {
-			http.Error(c.Writer, `{"error":"invalid_request"}`, http.StatusBadRequest)
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request"})
 			return
 		}
 
 		res, err := authHandler.RegisterClient(req)
 
 		if err != nil {
-			http.Error(c.Writer, `{"error":"server_error"}`, http.StatusInternalServerError)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "server_error"})
 			return
 		}
 
-		c.Writer.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(c.Writer).Encode(res)
+		c.JSON(http.StatusOK, res)
 	}
 }
 
@@ -170,8 +168,7 @@ func registerHandler(authHandler auth.Service) gin.HandlerFunc {
 func ginMetadataHandler(metadata func() any) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		data := metadata()
-		c.Header("Content-Type", "application/json")
-		json.NewEncoder(c.Writer).Encode(data)
+		c.JSON(http.StatusOK, data)
 	}
 }
 
