@@ -12,6 +12,7 @@ import (
 
 	"mcpproxy/internal/infrastructure/config"
 	"mcpproxy/internal/infrastructure/wire"
+	"mcpproxy/internal/server"
 	"mcpproxy/internal/service/auth"
 	"mcpproxy/internal/service/metadata"
 	"mcpproxy/internal/utility"
@@ -39,7 +40,12 @@ func main() {
 		log.Fatalf("Failed to initialize metadata handler: %v", err)
 	}
 
-	r, err := wire.NewGinEngine(cfg, authService, metadataService, encryption)
+	proxy, err := server.NewProxy(*cfg, metadataService, authService, encryption)
+	if err != nil {
+		log.Fatalf("Failed to initialize proxy: %v", err)
+	}
+
+	r, err := wire.NewGinEngine(cfg, authService, metadataService, proxy, encryption)
 	if err != nil {
 		log.Fatalf("Failed to initialize Gin engine: %v", err)
 	}

@@ -62,7 +62,7 @@ func TestCallbackHandler(t *testing.T) {
 			},
 			mockAuthData:       nil,
 			mockRedirectURL:    nil,
-			mockError:          nil,
+			mockError:          assert.AnError,
 			expectedStatusCode: http.StatusBadRequest,
 			expectedLocation:   "",
 		},
@@ -73,6 +73,7 @@ func TestCallbackHandler(t *testing.T) {
 			// Setup mocks
 			mockMetadata := new(MockMetadataService)
 			mockAuth := new(MockAuthService)
+			mockProxy := new(MockProxy)
 			mockEncryption := new(MockEncryption)
 
 			expectedRequest := &auth.AuthorizationCodeData{
@@ -80,14 +81,20 @@ func TestCallbackHandler(t *testing.T) {
 				State: tt.queryParams["state"],
 			}
 
-			if tt.queryParams["code"] != "" {
-				mockAuth.On("ManageAuthorizationCode", expectedRequest).Return(tt.mockAuthData, tt.mockRedirectURL, tt.mockError)
-			}
+			// Always set up the mock expectation since the handler always calls ManageAuthorizationCode
+			mockAuth.On("ManageAuthorizationCode", expectedRequest).Return(tt.mockAuthData, tt.mockRedirectURL, tt.mockError)
+
+			// Mock the AuthMiddleware - always needed
+			mockProxy.On("AuthMiddleware").Return(func(next http.Handler) http.Handler {
+				return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					next.ServeHTTP(w, r)
+				})
+			})
 
 			config := &config.Config{}
 
 			// Create gin engine
-			engine, err := NewGinEngine(config, mockAuth, mockMetadata, mockEncryption)
+			engine, err := NewGinEngine(config, mockAuth, mockMetadata, mockProxy, mockEncryption)
 			assert.NoError(t, err)
 
 			// Build URL with query parameters
@@ -126,12 +133,26 @@ func TestCallbackHandlerWithError(t *testing.T) {
 	// Setup mocks
 	mockMetadata := new(MockMetadataService)
 	mockAuth := new(MockAuthService)
+	mockProxy := new(MockProxy)
 	mockEncryption := new(MockEncryption)
+
+	// Mock the service to handle any authorization code request
+	mockAuth.On("ManageAuthorizationCode", &auth.AuthorizationCodeData{
+		Code:  "",
+		State: "",
+	}).Return((*auth.AuthorizationCodeData)(nil), (*url.URL)(nil), assert.AnError)
+
+	// Mock the AuthMiddleware - always needed
+	mockProxy.On("AuthMiddleware").Return(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			next.ServeHTTP(w, r)
+		})
+	})
 
 	config := &config.Config{}
 
 	// Create gin engine
-	engine, err := NewGinEngine(config, mockAuth, mockMetadata, mockEncryption)
+	engine, err := NewGinEngine(config, mockAuth, mockMetadata, mockProxy, mockEncryption)
 	assert.NoError(t, err)
 
 	// Test callback with error parameter (OAuth error response)

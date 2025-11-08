@@ -9,33 +9,48 @@ import (
 	"net/url"
 	"slices"
 
+	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/oauth2"
 )
 
 type ProxyAuthHandler struct {
-	config      config.Config
-	encKey      [32]byte
-	oauthConfig *oauth2.Config
-	encryption  utility.Encryption
+	config              config.Config
+	encKey              [32]byte
+	oauthConfig         *oauth2.Config
+	encryption          utility.Encryption
+	openidConfiguration *OpenIDConfiguration
+	jwks                *JWKS
 }
 
 func New(cfg config.Config, encryption utility.Encryption) (Service, error) {
+	openidConfiguration, err := fetchOpenIDConfiguration(cfg.IDP.OpenIDConfigurationURL)
+	if err != nil {
+		return nil, err
+	}
+
+	jwks, err := fetchJWKS(openidConfiguration.JWKSEndpoint)
+	if err != nil {
+		return nil, err
+	}
+
 	oauthConfig := &oauth2.Config{
 		ClientID:     cfg.IDP.ClientID,
 		ClientSecret: cfg.IDP.ClientSecret,
 		RedirectURL:  cfg.Proxy.BaseURL + "/callback",
 		Endpoint: oauth2.Endpoint{
-			AuthURL:  cfg.IDP.AuthorizationEndpoint,
-			TokenURL: cfg.IDP.TokenEndpoint,
+			AuthURL:  openidConfiguration.AuthorizationEndpoint,
+			TokenURL: openidConfiguration.TokenEndpoint,
 		},
 		Scopes: cfg.IDP.Scopes,
 	}
 
 	return &ProxyAuthHandler{
-		config:      cfg,
-		encKey:      cfg.EncryptionKey(),
-		oauthConfig: oauthConfig,
-		encryption:  encryption,
+		config:              cfg,
+		encKey:              cfg.EncryptionKey(),
+		oauthConfig:         oauthConfig,
+		encryption:          encryption,
+		openidConfiguration: openidConfiguration,
+		jwks:                jwks,
 	}, nil
 }
 
@@ -52,14 +67,6 @@ func (s *ProxyAuthHandler) RegisterClient(req *RegisterRequest) (*RegisterRespon
 	}
 
 	return &res, nil
-}
-
-func (s *ProxyAuthHandler) OpenIDConfiguration() any {
-	return nil
-}
-
-func (s *ProxyAuthHandler) ProtectedResourceMetadata() any {
-	return nil
 }
 
 func (s *ProxyAuthHandler) AuthenticateRequest(req *AuthenticateRequest) (string, error) {
@@ -181,4 +188,22 @@ func generateClientID(req *RegisterRequest, encryption utility.Encryption) (stri
 	encryptedClientID, err := clientData.Encode(encryption)
 
 	return encryptedClientID, clientSecret, err
+}
+
+func (s *ProxyAuthHandler) ValidateJWT(tokenString string) (*jwt.Token, error) {
+	keyFunc := func(token *jwt.Token) (any, error) {
+		if kid, ok := token.Header["kid"].(string); ok {
+			if key := s.jwks.GetKeyByKID(kid); key != nil {
+				return key, nil
+			}
+		}
+		return nil, fmt.Errorf("key not found")
+	}
+
+	token, err := jwt.Parse(tokenString, keyFunc)
+	if err != nil {
+		return nil, err
+	}
+
+	return token, nil
 }

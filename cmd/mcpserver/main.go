@@ -4,7 +4,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log"
 	"math/rand"
 	"net/http"
@@ -79,14 +78,21 @@ func getUserInfo(ctx context.Context, req *mcp.CallToolRequest, params *GetInfoP
 	userInfo := make(map[string]string)
 	for key, values := range req.Extra.Header {
 		if len(values) > 0 && key[:2] == "X_" {
-			userInfo[key] = values[0]
+			// remove X_ prefix
+			userInfo[key[2:]] = values[0]
 		}
+	}
+
+	content, err := json.Marshal(userInfo)
+	if err != nil {
+		log.Printf("Error marshalling response: %v", err)
+		return nil, nil, err
 	}
 
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{
 			&mcp.TextContent{
-				Text: fmt.Sprintf("User Information: %v", userInfo),
+				Text: string(content),
 			},
 		},
 	}, nil, nil
@@ -108,7 +114,11 @@ func getWeather(ctx context.Context, req *mcp.CallToolRequest, params *GetWeathe
 
 	response.HelloMessage = "Hello, " + user + "! Here is the weather you requested."
 
-	content, _ := json.Marshal(response)
+	content, err := json.Marshal(response)
+	if err != nil {
+		log.Printf("Error marshalling response: %v", err)
+		return nil, nil, err
+	}
 
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{

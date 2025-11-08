@@ -2,8 +2,10 @@ package wire
 
 import (
 	"mcpproxy/internal/service/auth"
+	"net/http"
 	"net/url"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/mock"
 	"golang.org/x/oauth2"
 )
@@ -28,6 +30,20 @@ func (m *MockMetadataService) WWWAuthenticateHeader() string {
 	return args.String(0)
 }
 
+// MockProxy implements server.Proxy for testing
+type MockProxy struct {
+	mock.Mock
+}
+
+func (m *MockProxy) ProxyHandler(w http.ResponseWriter, r *http.Request) {
+	m.Called(w, r)
+}
+
+func (m *MockProxy) AuthMiddleware() func(http.Handler) http.Handler {
+	args := m.Called()
+	return args.Get(0).(func(http.Handler) http.Handler)
+}
+
 // MockAuthService implements auth.Service for testing
 type MockAuthService struct {
 	mock.Mock
@@ -38,14 +54,9 @@ func (m *MockAuthService) RegisterClient(req *auth.RegisterRequest) (*auth.Regis
 	return args.Get(0).(*auth.RegisterResponse), args.Error(1)
 }
 
-func (m *MockAuthService) OpenIDConfiguration() any {
-	args := m.Called()
-	return args.Get(0)
-}
-
-func (m *MockAuthService) ProtectedResourceMetadata() any {
-	args := m.Called()
-	return args.Get(0)
+func (m *MockAuthService) ValidateJWT(tokenString string) (*jwt.Token, error) {
+	args := m.Called(tokenString)
+	return args.Get(0).(*jwt.Token), args.Error(1)
 }
 
 func (m *MockAuthService) AuthenticateRequest(req *auth.AuthenticateRequest) (string, error) {

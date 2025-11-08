@@ -62,6 +62,7 @@ func TestRegisterHandler(t *testing.T) {
 			// Setup mocks
 			mockMetadata := new(MockMetadataService)
 			mockAuth := new(MockAuthService)
+			mockProxy := new(MockProxy)
 			mockEncryption := new(MockEncryption)
 
 			if tt.mockError != nil {
@@ -70,10 +71,17 @@ func TestRegisterHandler(t *testing.T) {
 				mockAuth.On("RegisterClient", tt.requestBody).Return(tt.mockResponse, nil)
 			}
 
+			// Mock the AuthMiddleware - always needed
+			mockProxy.On("AuthMiddleware").Return(func(next http.Handler) http.Handler {
+				return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					next.ServeHTTP(w, r)
+				})
+			})
+
 			config := &config.Config{}
 
 			// Create gin engine
-			engine, err := NewGinEngine(config, mockAuth, mockMetadata, mockEncryption)
+			engine, err := NewGinEngine(config, mockAuth, mockMetadata, mockProxy, mockEncryption)
 			assert.NoError(t, err)
 
 			// Create request body
@@ -111,12 +119,20 @@ func TestRegisterHandlerInvalidJSON(t *testing.T) {
 	// Setup mocks
 	mockMetadata := new(MockMetadataService)
 	mockAuth := new(MockAuthService)
+	mockProxy := new(MockProxy)
 	mockEncryption := new(MockEncryption)
+
+	// Mock the AuthMiddleware - always needed
+	mockProxy.On("AuthMiddleware").Return(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			next.ServeHTTP(w, r)
+		})
+	})
 
 	config := &config.Config{}
 
 	// Create gin engine
-	engine, err := NewGinEngine(config, mockAuth, mockMetadata, mockEncryption)
+	engine, err := NewGinEngine(config, mockAuth, mockMetadata, mockProxy, mockEncryption)
 	assert.NoError(t, err)
 
 	// Create test request with invalid JSON

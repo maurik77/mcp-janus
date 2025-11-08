@@ -40,14 +40,22 @@ func TestOpenIDConfigurationEndpoint(t *testing.T) {
 			// Setup mocks
 			mockMetadata := new(MockMetadataService)
 			mockAuth := new(MockAuthService)
+			mockProxy := new(MockProxy)
 			mockEncryption := new(MockEncryption)
 
 			mockMetadata.On("OpenIDConfiguration").Return(tt.mockResponse)
 
+			// Mock the AuthMiddleware - always needed
+			mockProxy.On("AuthMiddleware").Return(func(next http.Handler) http.Handler {
+				return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					next.ServeHTTP(w, r)
+				})
+			})
+
 			config := &config.Config{}
 
 			// Create gin engine
-			engine, err := NewGinEngine(config, mockAuth, mockMetadata, mockEncryption)
+			engine, err := NewGinEngine(config, mockAuth, mockMetadata, mockProxy, mockEncryption)
 			assert.NoError(t, err)
 
 			// Create test request
@@ -100,14 +108,22 @@ func TestProtectedResourceMetadataEndpoint(t *testing.T) {
 			// Setup mocks
 			mockMetadata := new(MockMetadataService)
 			mockAuth := new(MockAuthService)
+			mockProxy := new(MockProxy)
 			mockEncryption := new(MockEncryption)
 
 			mockMetadata.On("ProtectedResourceMetadata").Return(tt.mockResponse)
 
+			// Mock the AuthMiddleware - always needed
+			mockProxy.On("AuthMiddleware").Return(func(next http.Handler) http.Handler {
+				return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					next.ServeHTTP(w, r)
+				})
+			})
+
 			config := &config.Config{}
 
 			// Create gin engine
-			engine, err := NewGinEngine(config, mockAuth, mockMetadata, mockEncryption)
+			engine, err := NewGinEngine(config, mockAuth, mockMetadata, mockProxy, mockEncryption)
 			assert.NoError(t, err)
 
 			// Create test request
@@ -138,12 +154,20 @@ func TestHealthEndpoint(t *testing.T) {
 	// Setup mocks
 	mockMetadata := new(MockMetadataService)
 	mockAuth := new(MockAuthService)
+	mockProxy := new(MockProxy)
 	mockEncryption := new(MockEncryption)
+
+	// Mock the AuthMiddleware - always needed
+	mockProxy.On("AuthMiddleware").Return(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			next.ServeHTTP(w, r)
+		})
+	})
 
 	config := &config.Config{}
 
 	// Create gin engine
-	engine, err := NewGinEngine(config, mockAuth, mockMetadata, mockEncryption)
+	engine, err := NewGinEngine(config, mockAuth, mockMetadata, mockProxy, mockEncryption)
 	assert.NoError(t, err)
 
 	// Create test request
