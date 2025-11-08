@@ -12,8 +12,8 @@ idp:
 encryption:
   master_key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
 
-upstreams:
-  - name: weather-test
-    resource: http://localhost:8081
-    base_url: http://localhost:8081
-    path_prefix: /mcp
+upstream:
+  name: weather-test
+  resource: http://localhost:8081
+  base_url: http://localhost:8081
+  path_prefix: /mcp

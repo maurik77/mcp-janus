@@ -18,29 +18,33 @@ type Encryption interface {
 type encryption struct {
 	cfg *config.Config
 	key [32]byte
+	gcm cipher.AEAD
 }
 
 func NewEncryption(cfg *config.Config) (Encryption, error) {
+	key := cfg.EncryptionKey()
+	block, err := aes.NewCipher(key[:])
+	if err != nil {
+		return nil, err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+
 	return &encryption{
 		cfg: cfg,
-		key: cfg.EncryptionKey(),
+		key: key,
+		gcm: gcm,
 	}, nil
 }
 
 func (e *encryption) Encrypt(data []byte) (string, error) {
-	block, err := aes.NewCipher(e.key[:])
-	if err != nil {
+	nonce := make([]byte, e.gcm.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
 		return "", err
 	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return "", err
-	}
-	nonce := make([]byte, gcm.NonceSize())
-	if _, err = io.ReadFull(rand.Reader, nonce); err != nil {
-		return "", err
-	}
-	cipherText := gcm.Seal(nonce, nonce, data, nil)
+	cipherText := e.gcm.Seal(nonce, nonce, data, nil)
 	return base64.URLEncoding.EncodeToString(cipherText), nil
 }
 
@@ -49,15 +53,7 @@ func (e *encryption) Decrypt(enc string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	block, err := aes.NewCipher(e.key[:])
-	if err != nil {
-		return nil, err
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, err
-	}
-	nonceSize := gcm.NonceSize()
+	nonceSize := e.gcm.NonceSize()
 	nonce, cipherText := data[:nonceSize], data[nonceSize:]
-	return gcm.Open(nil, nonce, cipherText, nil)
+	return e.gcm.Open(nil, nonce, cipherText, nil)
 }

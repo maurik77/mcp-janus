@@ -45,7 +45,8 @@ func AuthMiddleware(cfg *config.Config, service metadata.Service, encryption uti
 			// Unmarshal data into jwt.Token
 			jwtToken, _, err := new(jwt.Parser).ParseUnverified(string(data), jwt.MapClaims{})
 			if err != nil {
-				panic(err)
+				http.Error(w, `{"error":"invalid_token"}`, http.StatusUnauthorized)
+				return
 			}
 
 			// var t oauth2.Token
