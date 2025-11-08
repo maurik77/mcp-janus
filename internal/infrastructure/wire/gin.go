@@ -18,6 +18,7 @@ import (
 func NewGinEngine(config *config.Config,
 	authService auth.Service,
 	metadataService metadata.Service,
+	proxy server.Proxy,
 	encryption utility.Encryption) (*gin.Engine, error) {
 	if os.Getenv("GIN_MODE") == "" {
 		gin.SetMode(gin.ReleaseMode)
@@ -51,10 +52,10 @@ func NewGinEngine(config *config.Config,
 
 	// Proxy API - with auth middleware
 	authorized := r.Group("/mcp")
-	authorized.Use(ginAuthMiddleware(config, metadataService, encryption))
+	authorized.Use(ginAuthMiddleware(proxy))
 	{
 		authorized.Any("/*path", func(c *gin.Context) {
-			server.ProxyHandler(c.Writer, c.Request)
+			proxy.ProxyHandler(c.Writer, c.Request)
 		})
 	}
 
@@ -173,8 +174,8 @@ func ginMetadataHandler(metadata func() any) gin.HandlerFunc {
 }
 
 // ginAuthMiddleware wraps the auth middleware for Gin
-func ginAuthMiddleware(config *config.Config, service metadata.Service, encryption utility.Encryption) gin.HandlerFunc {
-	middleware := server.AuthMiddleware(config, service, encryption)
+func ginAuthMiddleware(proxy server.Proxy) gin.HandlerFunc {
+	middleware := proxy.AuthMiddleware()
 	return func(c *gin.Context) {
 		var handlerCalled bool
 		wrappedHandler := middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -2,6 +2,7 @@ package wire
 
 import (
 	"mcpproxy/internal/service/auth"
+	"net/http"
 	"net/url"
 
 	"github.com/stretchr/testify/mock"
@@ -26,6 +27,20 @@ func (m *MockMetadataService) ProtectedResourceMetadata() any {
 func (m *MockMetadataService) WWWAuthenticateHeader() string {
 	args := m.Called()
 	return args.String(0)
+}
+
+// MockProxy implements server.Proxy for testing
+type MockProxy struct {
+	mock.Mock
+}
+
+func (m *MockProxy) ProxyHandler(w http.ResponseWriter, r *http.Request) {
+	m.Called(w, r)
+}
+
+func (m *MockProxy) AuthMiddleware() func(http.Handler) http.Handler {
+	args := m.Called()
+	return args.Get(0).(func(http.Handler) http.Handler)
 }
 
 // MockAuthService implements auth.Service for testing

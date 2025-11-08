@@ -62,15 +62,26 @@ func TestMCPProxyEndpoint(t *testing.T) {
 			// Setup mocks
 			mockMetadata := new(MockMetadataService)
 			mockAuth := new(MockAuthService)
+			mockProxy := new(MockProxy)
 			mockEncryption := new(MockEncryption)
 
-			// Mock the WWWAuthenticateHeader for unauthorized responses
-			mockMetadata.On("WWWAuthenticateHeader").Return("Bearer realm=\"mcp-proxy\"")
+			// Mock the AuthMiddleware to return a middleware that rejects unauthorized requests
+			mockProxy.On("AuthMiddleware").Return(func(next http.Handler) http.Handler {
+				return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					authHeader := r.Header.Get("Authorization")
+					if authHeader == "" || authHeader == "Invalid token" {
+						w.Header().Set("WWW-Authenticate", "Bearer realm=\"mcp-proxy\"")
+						w.WriteHeader(http.StatusUnauthorized)
+						return
+					}
+					next.ServeHTTP(w, r)
+				})
+			})
 
 			config := &config.Config{}
 
 			// Create gin engine
-			engine, err := NewGinEngine(config, mockAuth, mockMetadata, mockEncryption)
+			engine, err := NewGinEngine(config, mockAuth, mockMetadata, mockProxy, mockEncryption)
 			assert.NoError(t, err)
 
 			// Create test request
@@ -92,7 +103,7 @@ func TestMCPProxyEndpoint(t *testing.T) {
 			}
 
 			// Verify mock expectations
-			mockMetadata.AssertExpectations(t)
+			mockProxy.AssertExpectations(t)
 		})
 	}
 }
@@ -106,12 +117,20 @@ func TestMCPProxyEndpointWithValidAuth(t *testing.T) {
 	// Setup mocks
 	mockMetadata := new(MockMetadataService)
 	mockAuth := new(MockAuthService)
+	mockProxy := new(MockProxy)
 	mockEncryption := new(MockEncryption)
+
+	// Mock the AuthMiddleware to reject unauthorized requests
+	mockProxy.On("AuthMiddleware").Return(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusUnauthorized)
+		})
+	})
 
 	config := &config.Config{}
 
 	// Create gin engine
-	engine, err := NewGinEngine(config, mockAuth, mockMetadata, mockEncryption)
+	engine, err := NewGinEngine(config, mockAuth, mockMetadata, mockProxy, mockEncryption)
 	assert.NoError(t, err)
 
 	// Test that the endpoint exists and responds
@@ -142,12 +161,20 @@ func TestMCPProxyEndpointCatchAll(t *testing.T) {
 			// Setup mocks
 			mockMetadata := new(MockMetadataService)
 			mockAuth := new(MockAuthService)
+			mockProxy := new(MockProxy)
 			mockEncryption := new(MockEncryption)
+
+			// Mock the AuthMiddleware to reject unauthorized requests
+			mockProxy.On("AuthMiddleware").Return(func(next http.Handler) http.Handler {
+				return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.WriteHeader(http.StatusUnauthorized)
+				})
+			})
 
 			config := &config.Config{}
 
 			// Create gin engine
-			engine, err := NewGinEngine(config, mockAuth, mockMetadata, mockEncryption)
+			engine, err := NewGinEngine(config, mockAuth, mockMetadata, mockProxy, mockEncryption)
 			assert.NoError(t, err)
 
 			// Create test request

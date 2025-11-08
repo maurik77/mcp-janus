@@ -55,6 +55,7 @@ func TestAuthHandler(t *testing.T) {
 			// Setup mocks
 			mockMetadata := new(MockMetadataService)
 			mockAuth := new(MockAuthService)
+			mockProxy := new(MockProxy)
 			mockEncryption := new(MockEncryption)
 
 			expectedRequest := &auth.AuthenticateRequest{
@@ -67,10 +68,17 @@ func TestAuthHandler(t *testing.T) {
 
 			mockAuth.On("AuthenticateRequest", expectedRequest).Return(tt.mockAuthURL, tt.mockError)
 
+			// Mock the AuthMiddleware - always needed
+			mockProxy.On("AuthMiddleware").Return(func(next http.Handler) http.Handler {
+				return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					next.ServeHTTP(w, r)
+				})
+			})
+
 			config := &config.Config{}
 
 			// Create gin engine
-			engine, err := NewGinEngine(config, mockAuth, mockMetadata, mockEncryption)
+			engine, err := NewGinEngine(config, mockAuth, mockMetadata, mockProxy, mockEncryption)
 			assert.NoError(t, err)
 
 			// Build URL with query parameters
@@ -109,12 +117,29 @@ func TestAuthHandlerInvalidRequest(t *testing.T) {
 	// Setup mocks
 	mockMetadata := new(MockMetadataService)
 	mockAuth := new(MockAuthService)
+	mockProxy := new(MockProxy)
 	mockEncryption := new(MockEncryption)
+
+	// Mock the service to handle empty authentication request
+	mockAuth.On("AuthenticateRequest", &auth.AuthenticateRequest{
+		ClientID:            "",
+		State:               "",
+		CodeChallenge:       "",
+		RedirectURI:         "",
+		CodeChallengeMethod: "",
+	}).Return("", assert.AnError)
+
+	// Mock the AuthMiddleware - always needed
+	mockProxy.On("AuthMiddleware").Return(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			next.ServeHTTP(w, r)
+		})
+	})
 
 	config := &config.Config{}
 
 	// Create gin engine
-	engine, err := NewGinEngine(config, mockAuth, mockMetadata, mockEncryption)
+	engine, err := NewGinEngine(config, mockAuth, mockMetadata, mockProxy, mockEncryption)
 	assert.NoError(t, err)
 
 	// Create test request with invalid parameters (missing required fields)
