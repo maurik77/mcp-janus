@@ -75,3 +75,4 @@ $RECYCLE.BIN/
 # Backup files
 *.bak
 *.backup
+*.exe*

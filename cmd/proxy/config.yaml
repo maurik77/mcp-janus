@@ -1,0 +1,28 @@
+proxy:
+  base_url: http://localhost:8080
+  listen_addr: ":8080"
+
+idp:
+  issuer_url: https://auth.example.com
+  client_id: 379eab96-a9ad-401f-8158-19b130fefbf3
+  client_secret: supersecret123
+  authorization_endpoint: https://swelfad01azne.b2clogin.com/swelfad01azne.onmicrosoft.com/b2c_1a_home_realm_discovery/oauth2/v2.0/authorize
+  token_endpoint: https://swelfad01azne.b2clogin.com/swelfad01azne.onmicrosoft.com/b2c_1a_home_realm_discovery/oauth2/v2.0/token
+  scopes:
+    - openid
+    - profile
+    - 379eab96-a9ad-401f-8158-19b130fefbf3
+  claims_mapping:
+    sub: X_sub
+    name: X_full_name
+    email: X_email
+    upn: X_upn
+
+encryption:
+  master_key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+
+upstream:
+  name: weather-test
+  resource: http://localhost:8081
+  base_url: http://localhost:8081
+  path_prefix: /mcp

@@ -1,136 +1,72 @@
+// cmd/proxy/main.go
 package main
 
 import (
 	"context"
-	"log/slog"
+	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
-	"mcpproxy/internal/config"
-	"mcpproxy/internal/crypto"
-	"mcpproxy/internal/mcp"
-	"mcpproxy/internal/oauth"
-	"mcpproxy/internal/tokens"
-	pkghttp "mcpproxy/pkg/http"
+	"mcpproxy/internal/infrastructure/config"
+	"mcpproxy/internal/infrastructure/wire"
+	"mcpproxy/internal/service/auth"
+	"mcpproxy/internal/service/metadata"
+	"mcpproxy/internal/utility"
 )
 
 func main() {
-	// Load configuration
-	cfg, err := config.LoadFromEnv()
+	var err error
+	cfg, err := config.Load()
 	if err != nil {
-		slog.Error("failed to load configuration", "error", err)
-		os.Exit(1)
+		log.Fatalf("Failed to load config: %v", err)
 	}
 
-	if err := cfg.Validate(); err != nil {
-		slog.Error("invalid configuration", "error", err)
-		os.Exit(1)
-	}
-
-	// Setup structured logging
-	logLevel := slog.LevelInfo
-	switch cfg.LogLevel {
-	case "debug":
-		logLevel = slog.LevelDebug
-	case "warn":
-		logLevel = slog.LevelWarn
-	case "error":
-		logLevel = slog.LevelError
-	}
-
-	var handler slog.Handler
-	if cfg.LogFormat == "json" {
-		handler = slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel})
-	} else {
-		handler = slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel})
-	}
-	logger := slog.New(handler)
-	slog.SetDefault(logger)
-
-	slog.Info("starting MCP proxy server",
-		"version", "1.0.0",
-		"proxy_url", cfg.ProxyURL,
-		"upstream_mcp_url", cfg.UpstreamMCPURL,
-	)
-
-	// Initialize crypto service
-	cryptoService, err := crypto.NewAESGCMService(cfg)
+	encryption, err := utility.NewEncryption(cfg)
 	if err != nil {
-		slog.Error("failed to initialize crypto service", "error", err)
-		os.Exit(1)
+		log.Fatalf("Failed to initialize encryption: %v", err)
 	}
 
-	// Initialize token store
-	tokenStore, err := tokens.NewMemoryStore(cfg)
+	authService, err := auth.New(*cfg, encryption)
 	if err != nil {
-		slog.Error("failed to initialize token store", "error", err)
-		os.Exit(1)
+		log.Fatalf("Failed to initialize auth handler: %v", err)
 	}
 
-	// Initialize opaque token service
-	opaqueTokenService := tokens.NewOpaqueTokenService(cryptoService, cfg)
-
-	// Initialize OAuth provider
-	oauthProvider := oauth.NewProvider(cfg)
-
-	// Initialize MCP client
-	mcpClient := mcp.NewClient(cfg)
-
-	// Create HTTP server with handlers
-	server := pkghttp.NewServer(cfg, pkghttp.ServerDependencies{
-		CryptoService:      cryptoService,
-		TokenStore:         tokenStore,
-		OpaqueTokenService: opaqueTokenService,
-		OAuthProvider:      oauthProvider,
-		MCPClient:          mcpClient,
-	})
-
-	// Setup HTTP server
-	httpServer := &http.Server{
-		Addr:         cfg.ListenAddr,
-		Handler:      server.Handler(),
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
-		IdleTimeout:  60 * time.Second,
+	metadataService, err := metadata.New(*cfg)
+	if err != nil {
+		log.Fatalf("Failed to initialize metadata handler: %v", err)
 	}
 
-	// Start server in goroutine
+	r, err := wire.NewGinEngine(cfg, authService, metadataService, encryption)
+	if err != nil {
+		log.Fatalf("Failed to initialize Gin engine: %v", err)
+	}
+
+	srv := &http.Server{
+		Addr:    cfg.Proxy.ListenAddr,
+		Handler: r,
+	}
+
 	go func() {
-		var err error
-		if cfg.TLSCertFile != "" && cfg.TLSKeyFile != "" {
-			slog.Info("starting HTTPS server", "addr", cfg.ListenAddr)
-			err = httpServer.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile)
-		} else {
-			slog.Warn("starting HTTP server (TLS not configured)", "addr", cfg.ListenAddr)
-			err = httpServer.ListenAndServe()
-		}
-
-		if err != nil && err != http.ErrServerClosed {
-			slog.Error("server error", "error", err)
-			os.Exit(1)
+		log.Printf("MCP Proxy Server starting on %s", cfg.Proxy.ListenAddr)
+		log.Printf("Base URL: %s", cfg.Proxy.BaseURL)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Server failed: %v", err)
 		}
 	}()
 
-	slog.Info("server started successfully")
+	// Graceful shutdown
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+	<-stop
 
-	// Wait for interrupt signal for graceful shutdown
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
-
-	slog.Info("shutting down server...")
-
-	// Create shutdown context with timeout
-	ctx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
+	log.Println("Shutting down server...")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-
-	if err := httpServer.Shutdown(ctx); err != nil {
-		slog.Error("server forced to shutdown", "error", err)
-		os.Exit(1)
+	if err := srv.Shutdown(ctx); err != nil {
+		log.Fatalf("Server forced to shutdown: %v", err)
 	}
-
-	slog.Info("server exited gracefully")
+	log.Println("Server stopped.")
 }
