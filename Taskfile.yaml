@@ -13,6 +13,12 @@ tasks:
     desc: Run tests and build (default target)
     deps: [test, build]
 
+  create-tls-certs:
+    desc: Create self-signed TLS certificates for local development
+    cmds:
+      - echo "Creating self-signed TLS certificates... (you need to install mkcert)"
+      - mkcert localhost 127.0.0.1 ::1
+
   build:
     desc: Build the proxy server binary
     cmds:

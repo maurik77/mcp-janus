@@ -23,8 +23,11 @@ type IDP struct {
 }
 
 type Proxy struct {
-	BaseURL    string `mapstructure:"base_url"`
-	ListenAddr string `mapstructure:"listen_addr"`
+	BaseURL     string `mapstructure:"base_url"`
+	ListenAddr  string `mapstructure:"listen_addr"`
+	TLS         bool   `mapstructure:"tls"`
+	TLSCertFile string `mapstructure:"tls_cert_file"`
+	TLSKeyFile  string `mapstructure:"tls_key_file"`
 }
 
 type Config struct {
@@ -57,6 +60,10 @@ func Load() (*Config, error) {
 	viper.SetEnvPrefix("MCP")
 	viper.BindEnv("proxy.base_url", "MCP_PROXY_BASE_URL")
 	viper.BindEnv("idp.client_secret", "MCP_IDP_CLIENT_SECRET")
+	viper.BindEnv("proxy.listen_addr", "MCP_LISTEN_ADDR")
+	viper.BindEnv("proxy.tls", "MCP_TLS")
+	viper.BindEnv("proxy.tls_cert_file", "MCP_TLS_CERT_FILE")
+	viper.BindEnv("proxy.tls_key_file", "MCP_TLS_KEY_FILE")
 
 	if err := viper.ReadInConfig(); err != nil {
 		return nil, err

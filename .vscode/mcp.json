@@ -1,9 +1,13 @@
 {
 	"servers": {
-		"get-weather": {
+		"mcp-hello-world-auth": {
 			"url": "http://localhost:8080/mcp",
 			"type": "http"
-		}
+		},
+		"mcp-hello-world": {
+			"url": "http://localhost:8081/mcp",
+			"type": "http"
+		}		
 	},
 	"inputs": []
 }

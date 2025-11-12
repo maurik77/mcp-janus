@@ -58,7 +58,16 @@ func main() {
 	go func() {
 		log.Printf("MCP Proxy Server starting on %s", cfg.Proxy.ListenAddr)
 		log.Printf("Base URL: %s", cfg.Proxy.BaseURL)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+
+		var err error
+
+		if cfg.Proxy.TLS {
+			err = srv.ListenAndServeTLS(cfg.Proxy.TLSCertFile, cfg.Proxy.TLSKeyFile)
+		} else {
+			err = srv.ListenAndServe()
+		}
+
+		if err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Server failed: %v", err)
 		}
 	}()
