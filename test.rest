@@ -1,0 +1,223 @@
+### MCP Proxy - REST API Tests
+### Base URL
+@baseUrl = http://localhost:8080
+@clientId = test_client
+@state = test_state_123
+@codeChallenge = E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM
+@codeChallengeMethod = S256
+@redirectUri = https://example.com/callback
+
+###############################################################################
+# METADATA ENDPOINTS
+###############################################################################
+
+### Health Check
+GET {{baseUrl}}/health
+
+### OpenID Configuration
+GET {{baseUrl}}/.well-known/openid-configuration
+
+### OAuth Protected Resource Metadata
+GET {{baseUrl}}/.well-known/oauth-protected-resource
+
+###############################################################################
+# CLIENT REGISTRATION (RFC 7591)
+###############################################################################
+
+### Register New Client
+POST {{baseUrl}}/register
+Content-Type: application/json
+
+{
+  "client_name": "Test Client Application",
+  "redirect_uris": [
+    "https://example.com/callback",
+    "https://example.com/oauth/callback"
+  ],
+  "grant_types": [
+    "authorization_code",
+    "refresh_token"
+  ],
+  "response_types": [
+    "code"
+  ],
+  "token_endpoint_auth_method": "client_secret_basic",
+  "scope": "read write"
+}
+
+### Register Client with Minimal Data
+POST {{baseUrl}}/register
+Content-Type: application/json
+
+{
+  "client_name": "Minimal Client",
+  "redirect_uris": [
+    "https://example.com/callback"
+  ]
+}
+
+###############################################################################
+# AUTHORIZATION FLOW (OAuth 2.0 + PKCE)
+###############################################################################
+
+### Start Authorization Request (GET)
+GET {{baseUrl}}/auth?client_id={{clientId}}&state={{state}}&code_challenge={{codeChallenge}}&redirect_uri={{redirectUri}}&code_challenge_method={{codeChallengeMethod}}&response_type=code&scope=read
+
+### Start Authorization Request with All Parameters
+GET {{baseUrl}}/auth?client_id={{clientId}}&state={{state}}&code_challenge={{codeChallenge}}&redirect_uri={{redirectUri}}&code_challenge_method={{codeChallengeMethod}}&response_type=code&scope=read%20write&resource=https://api.example.com
+
+### Start Authorization Request - Minimal
+GET {{baseUrl}}/auth?client_id={{clientId}}&state={{state}}
+
+###############################################################################
+# CALLBACK HANDLING
+###############################################################################
+
+### OAuth Callback (Success)
+# Note: This would typically be called by the authorization server
+GET {{baseUrl}}/callback?code=auth_code_123&state={{state}}
+
+### OAuth Callback - Missing Code
+GET {{baseUrl}}/callback?state={{state}}
+
+### OAuth Callback - OAuth Error Response
+GET {{baseUrl}}/callback?error=access_denied&error_description=User+denied+access&state={{state}}
+
+### OAuth Callback - Invalid State
+GET {{baseUrl}}/callback?error=invalid_state&error_description=State+parameter+mismatch&state=invalid_state
+
+###############################################################################
+# TOKEN ENDPOINT
+###############################################################################
+
+### Exchange Authorization Code for Token (JSON)
+POST {{baseUrl}}/token
+Content-Type: application/json
+
+{
+  "grant_type": "authorization_code",
+  "code": "auth_code_123",
+  "redirect_uri": "{{redirectUri}}",
+  "client_id": "{{clientId}}",
+  "client_secret": "client_secret_here",
+  "code_verifier": "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+}
+
+### Exchange Authorization Code for Token (Form Data)
+POST {{baseUrl}}/token
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=authorization_code&code=auth_code_123&redirect_uri={{redirectUri}}&client_id={{clientId}}&client_secret=client_secret_here&code_verifier=dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk
+
+### Client Credentials Grant
+POST {{baseUrl}}/token
+Content-Type: application/json
+
+{
+  "grant_type": "client_credentials",
+  "client_id": "{{clientId}}",
+  "client_secret": "client_secret_here",
+  "scope": "read write"
+}
+
+### Invalid Token Request
+POST {{baseUrl}}/token
+Content-Type: application/json
+
+{
+  "grant_type": "authorization_code",
+  "code": "invalid_code"
+}
+
+###############################################################################
+# REFRESH TOKEN
+###############################################################################
+
+### Refresh Token Request (JSON) - NOT IMPLEMENTED
+POST {{baseUrl}}/refresh
+Content-Type: application/json
+
+{
+  "refresh_token": "refresh_token_here",
+  "client_id": "{{clientId}}",
+  "client_secret": "client_secret_here"
+}
+
+### Refresh Token Request (Form Data) - NOT IMPLEMENTED
+POST {{baseUrl}}/refresh
+Content-Type: application/x-www-form-urlencoded
+
+refresh_token=refresh_token_here&client_id={{clientId}}&client_secret=client_secret_here
+
+###############################################################################
+# MCP PROXY ENDPOINTS (Protected - Require Authorization)
+###############################################################################
+
+### MCP Proxy - GET without Auth (Should return 401)
+GET {{baseUrl}}/mcp/test
+
+### MCP Proxy - GET with Invalid Auth (Should return 401)
+GET {{baseUrl}}/mcp/test
+Authorization: Invalid token
+
+### MCP Proxy - GET with Bearer Token
+# Replace with actual opaque token from /token endpoint
+GET {{baseUrl}}/mcp/test
+Authorization: Bearer YOUR_OPAQUE_TOKEN_HERE
+
+### MCP Proxy - POST to API endpoint
+POST {{baseUrl}}/mcp/api/call
+Authorization: Bearer YOUR_OPAQUE_TOKEN_HERE
+Content-Type: application/json
+
+{
+  "method": "test.method",
+  "params": {
+    "param1": "value1"
+  }
+}
+
+### MCP Proxy - PUT request
+PUT {{baseUrl}}/mcp/resource/123
+Authorization: Bearer YOUR_OPAQUE_TOKEN_HERE
+Content-Type: application/json
+
+{
+  "name": "Updated Resource",
+  "value": "new_value"
+}
+
+### MCP Proxy - DELETE request
+DELETE {{baseUrl}}/mcp/resource/123
+Authorization: Bearer YOUR_OPAQUE_TOKEN_HERE
+
+### MCP Proxy - Nested path
+GET {{baseUrl}}/mcp/api/v1/resource/nested/path
+Authorization: Bearer YOUR_OPAQUE_TOKEN_HERE
+
+### MCP Proxy - Deep nested path
+GET {{baseUrl}}/mcp/deep/nested/path/test
+Authorization: Bearer YOUR_OPAQUE_TOKEN_HERE
+
+###############################################################################
+# ERROR CASES
+###############################################################################
+
+### Invalid Method on Refresh Endpoint
+GET {{baseUrl}}/refresh
+
+### Missing Content-Type
+POST {{baseUrl}}/token
+
+{
+  "code": "test"
+}
+
+### Malformed JSON
+POST {{baseUrl}}/register
+Content-Type: application/json
+
+{
+  "client_name": "Test Client"
+  "redirect_uris": []
+}

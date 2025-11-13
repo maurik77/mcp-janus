@@ -1,0 +1,44 @@
+version: '3.8'
+
+services:
+  mcpserver:
+    build:
+      context: .
+      dockerfile: Dockerfile.mcpserver
+    container_name: mcp-test-server
+    ports:
+      - "8081:8081"
+    networks:
+      - mcp-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  mcpproxy:
+    build:
+      context: .
+      dockerfile: Dockerfile.proxy
+    container_name: mcp-proxy
+    ports:
+      - "8080:8080"
+    depends_on:
+      mcpserver:
+        condition: service_healthy
+    environment:
+      - PROXY_BASE_URL=http://localhost:8080
+      - UPSTREAM_MCP_URL=http://mcpserver:8081
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+    networks:
+      - mcp-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+networks:
+  mcp-network:
+    driver: bridge

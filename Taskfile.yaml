@@ -1,0 +1,220 @@
+version: '3'
+
+vars:
+  BINARY_NAME: mcpproxy
+  TEST_SERVER_NAME: mcpserver
+  BUILD_DIR: ./bin
+  MAIN_PATH: ./cmd/proxy
+  TEST_SERVER_PATH: ./cmd/mcpserver
+  COVERAGE_FILE: coverage.out
+
+tasks:
+  default:
+    desc: Run tests and build (default target)
+    deps: [test, build]
+
+  create-tls-certs:
+    desc: Create self-signed TLS certificates for local development
+    cmds:
+      - echo "Creating self-signed TLS certificates... (you need to install mkcert)"
+      - mkcert localhost 127.0.0.1 ::1
+
+  build:
+    desc: Build the proxy server binary
+    cmds:
+      - echo "Building {{.BINARY_NAME}}..."
+      - go build -o {{.BUILD_DIR}}/{{.BINARY_NAME}} {{.MAIN_PATH}}
+      - echo "✓ Build complete{{":"}} {{.BUILD_DIR}}/{{.BINARY_NAME}}"
+    sources:
+      - "**/*.go"
+      - go.mod
+      - go.sum
+    generates:
+      - "{{.BUILD_DIR}}/{{.BINARY_NAME}}"
+
+  build-testserver:
+    desc: Build the MCP test server binary
+    cmds:
+      - echo "Building {{.TEST_SERVER_NAME}}..."
+      - go build -o {{.BUILD_DIR}}/{{.TEST_SERVER_NAME}} {{.TEST_SERVER_PATH}}
+      - echo "✓ Build complete{{":"}} {{.BUILD_DIR}}/{{.TEST_SERVER_NAME}}"
+    sources:
+      - "cmd/mcpserver/**/*.go"
+      - go.mod
+      - go.sum
+    generates:
+      - "{{.BUILD_DIR}}/{{.TEST_SERVER_NAME}}"
+
+  run-testserver:
+    desc: Build and run the MCP test server
+    cmds:
+      - echo "Starting MCP test server on port 8081..."
+      - go run {{.TEST_SERVER_PATH}}
+
+  test-testserver:
+    desc: Run tests against the MCP test server
+    deps: [build-testserver]
+    cmds:
+      - echo "Testing MCP server..."
+      - ./scripts/test-mcpserver.sh
+
+  start-all:
+    desc: Start both MCP test server and proxy
+    cmds:
+      - echo "Starting test environment..."
+      - ./scripts/start-servers.sh
+
+  stop-all:
+    desc: Stop both MCP test server and proxy
+    cmds:
+      - echo "Stopping servers..."
+      - ./scripts/stop-servers.sh
+
+  demo:
+    desc: Run the complete demo (requires servers to be running)
+    cmds:
+      - echo "Running demo..."
+      - ./scripts/demo-proxy.sh
+
+  test:
+    desc: Run all tests
+    cmds:
+      - echo "Running tests..."
+      - go test ./... -v
+
+  coverage:
+    desc: Run tests with coverage report
+    cmds:
+      - echo "Running tests with coverage..."
+      - go test ./... -coverprofile={{.COVERAGE_FILE}}
+      - go tool cover -html={{.COVERAGE_FILE}}
+      - echo "✓ Coverage report generated{{":"}} {{.COVERAGE_FILE}}"
+    generates:
+      - "{{.COVERAGE_FILE}}"
+
+  clean:
+    desc: Remove build artifacts
+    cmds:
+      - echo "Cleaning..."
+      - rm -rf {{.BUILD_DIR}}
+      - rm -f {{.COVERAGE_FILE}}
+      - echo "✓ Clean complete"
+
+  run:
+    desc: Build and run the proxy server (development mode)
+    deps: [build]
+    vars:
+      CLIENT_SECRET:
+        sh: 'bash -c ''read -s -p "Enter MCP_IDP_CLIENT_SECRET: " secret && echo $secret'''
+    platforms: [linux, darwin]
+    env:
+      PROXY_URL: "http://localhost:8080"
+      UPSTREAM_MCP_URL: "http://localhost:8081"
+      MCP_IDP_CLIENT_SECRET: "{{.CLIENT_SECRET}}"
+    cmds:
+      - echo "Starting MCP proxy server..."
+      - go run {{.MAIN_PATH}}
+  
+  run:windows:
+    desc: Build and run the proxy server (development mode - Windows)
+    deps: [build]
+    vars:
+      CLIENT_SECRET:
+        sh: pwsh -Command "Read-Host -Prompt 'Enter MCP_IDP_CLIENT_SECRET' -AsSecureString | ConvertFrom-SecureString -AsPlainText"
+    platforms: [windows]
+    env:
+      PROXY_URL: "http://localhost:8080"
+      UPSTREAM_MCP_URL: "http://localhost:8081"
+      MCP_IDP_CLIENT_SECRET: "{{.CLIENT_SECRET}}"
+    cmds:
+      - echo "Starting MCP proxy server..."
+      - go run {{.MAIN_PATH}}
+
+  install:
+    desc: Download and verify dependencies
+    cmds:
+      - echo "Installing dependencies..."
+      - go mod download
+      - go mod verify
+      - echo "✓ Dependencies installed"
+
+  lint:
+    desc: Run golangci-lint
+    cmds:
+      - echo "Running linter..."
+      - golangci-lint run ./...
+      - echo "✓ Lint complete"
+
+  fmt:
+    desc: Format code with gofmt and goimports
+    cmds:
+      - echo "Formatting code..."
+      - go fmt ./...
+      - goimports -w .
+      - echo "✓ Format complete"
+
+  gen-keys:
+    desc: Generate new encryption keys
+    cmds:
+      - echo "Generating encryption keys..."
+      - go run scripts/gen-keys/main.go
+
+  rotate-keys:
+    desc: Rotate encryption keys
+    cmds:
+      - echo "Rotating encryption keys..."
+      - go run scripts/rotate-keys/main.go
+
+  build-all:
+    desc: Build for multiple platforms
+    cmds:
+      - echo "Building for multiple platforms..."
+      - mkdir -p {{.BUILD_DIR}}
+      - task: build-linux-amd64
+      - task: build-linux-arm64
+      - task: build-darwin-amd64
+      - task: build-darwin-arm64
+      - task: build-windows-amd64
+      - echo "✓ Multi-platform build complete"
+
+  build-linux-amd64:
+    internal: true
+    cmds:
+      - GOOS=linux GOARCH=amd64 go build -o {{.BUILD_DIR}}/{{.BINARY_NAME}}-linux-amd64 {{.MAIN_PATH}}
+
+  build-linux-arm64:
+    internal: true
+    cmds:
+      - GOOS=linux GOARCH=arm64 go build -o {{.BUILD_DIR}}/{{.BINARY_NAME}}-linux-arm64 {{.MAIN_PATH}}
+
+  build-darwin-amd64:
+    internal: true
+    cmds:
+      - GOOS=darwin GOARCH=amd64 go build -o {{.BUILD_DIR}}/{{.BINARY_NAME}}-darwin-amd64 {{.MAIN_PATH}}
+
+  build-darwin-arm64:
+    internal: true
+    cmds:
+      - GOOS=darwin GOARCH=arm64 go build -o {{.BUILD_DIR}}/{{.BINARY_NAME}}-darwin-arm64 {{.MAIN_PATH}}
+
+  build-windows-amd64:
+    internal: true
+    cmds:
+      - GOOS=windows GOARCH=amd64 go build -o {{.BUILD_DIR}}/{{.BINARY_NAME}}-windows-amd64.exe {{.MAIN_PATH}}
+
+  security:
+    desc: Run security checks with gosec
+    cmds:
+      - echo "Running security checks..."
+      - gosec ./...
+      - echo "✓ Security check complete"
+
+  help:
+    desc: Display help message
+    cmds:
+      - echo "MCP Proxy Server - Task Commands"
+      - echo ""
+      - echo "Usage{{":"}} task [target]"
+      - echo ""
+      - echo "Available tasks{{":"}}"
+      - task --list
