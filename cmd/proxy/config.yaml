@@ -19,6 +19,12 @@ idp:
 encryption:
   master_key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
 
+telemetry:
+  enabled: false
+  service_name: mcp-proxy
+  service_version: 1.0.0
+  otlp_endpoint: localhost:4318
+
 upstream:
   name: weather-test
   resource: http://localhost:8081

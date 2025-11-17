@@ -118,8 +118,8 @@ func (p *proxy) ProxyHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, span := p.tracer.Start(r.Context(), "proxy.ProxyHandler")
 	defer span.End()
 
-	upstream := r.Context().Value("upstream").(config.Upstream)
-	realToken := r.Context().Value("real_token").(string)
+	upstream := r.Context().Value(keyUpstream).(config.Upstream)
+	realToken := r.Context().Value(keyRealToken).(string)
 
 	span.SetAttributes(
 		attribute.String("http.method", r.Method),
