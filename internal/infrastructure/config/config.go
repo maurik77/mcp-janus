@@ -102,6 +102,11 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 
+	viper.SetDefault("telemetry.otlp_endpoint", "localhost:4317")
+	viper.SetDefault("telemetry.service_name", "mcp-proxy")
+	viper.SetDefault("telemetry.service_version", "1.0.0")
+	viper.SetDefault("telemetry.enabled", true)
+
 	var cfg Config
 	if err := viper.Unmarshal(&cfg); err != nil {
 		return nil, err

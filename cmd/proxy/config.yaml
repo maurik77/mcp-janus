@@ -21,9 +21,6 @@ encryption:
 
 telemetry:
   enabled: false
-  service_name: mcp-proxy
-  service_version: 1.0.0
-  otlp_endpoint: localhost:4318
 
 upstream:
   name: weather-test

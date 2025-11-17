@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"mcpproxy/internal/infrastructure/config"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -18,14 +19,6 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-// Config holds OpenTelemetry configuration
-type Config struct {
-	ServiceName    string
-	ServiceVersion string
-	OTLPEndpoint   string
-	Enabled        bool
-}
-
 // Telemetry holds the telemetry providers and shutdown functions
 type Telemetry struct {
 	TracerProvider *sdktrace.TracerProvider
@@ -36,13 +29,13 @@ type Telemetry struct {
 }
 
 // Initialize sets up OpenTelemetry tracing and metrics
-func Initialize(ctx context.Context, cfg Config) (*Telemetry, error) {
+func Initialize(ctx context.Context, cfg config.Telemetry) (*Telemetry, func(), error) {
 	if !cfg.Enabled {
 		log.Println("OpenTelemetry is disabled")
 		return &Telemetry{
 			Tracer: otel.Tracer(cfg.ServiceName),
 			Meter:  otel.Meter(cfg.ServiceName),
-		}, nil
+		}, func() {}, nil
 	}
 
 	t := &Telemetry{
@@ -57,13 +50,13 @@ func Initialize(ctx context.Context, cfg Config) (*Telemetry, error) {
 		),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create resource: %w", err)
+		return nil, nil, fmt.Errorf("failed to create resource: %w", err)
 	}
 
 	// Setup trace provider
 	tracerProvider, err := setupTraceProvider(ctx, cfg, res)
 	if err != nil {
-		return nil, fmt.Errorf("failed to setup trace provider: %w", err)
+		return nil, nil, fmt.Errorf("failed to setup trace provider: %w", err)
 	}
 	t.TracerProvider = tracerProvider
 	t.shutdownFuncs = append(t.shutdownFuncs, tracerProvider.Shutdown)
@@ -72,7 +65,7 @@ func Initialize(ctx context.Context, cfg Config) (*Telemetry, error) {
 	// Setup meter provider
 	meterProvider, err := setupMeterProvider(ctx, cfg, res)
 	if err != nil {
-		return nil, fmt.Errorf("failed to setup meter provider: %w", err)
+		return nil, nil, fmt.Errorf("failed to setup meter provider: %w", err)
 	}
 	t.MeterProvider = meterProvider
 	t.shutdownFuncs = append(t.shutdownFuncs, meterProvider.Shutdown)
@@ -89,11 +82,17 @@ func Initialize(ctx context.Context, cfg Config) (*Telemetry, error) {
 	t.Meter = otel.Meter(cfg.ServiceName)
 
 	log.Printf("OpenTelemetry initialized successfully (endpoint: %s)", cfg.OTLPEndpoint)
-	return t, nil
+	return t, func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := t.Shutdown(shutdownCtx); err != nil {
+			log.Printf("Error shutting down telemetry: %v", err)
+		}
+	}, nil
 }
 
 // setupTraceProvider creates and configures the trace provider
-func setupTraceProvider(ctx context.Context, cfg Config, res *resource.Resource) (*sdktrace.TracerProvider, error) {
+func setupTraceProvider(ctx context.Context, cfg config.Telemetry, res *resource.Resource) (*sdktrace.TracerProvider, error) {
 	// Create OTLP HTTP trace exporter
 	traceExporter, err := otlptracehttp.New(ctx,
 		otlptracehttp.WithEndpoint(cfg.OTLPEndpoint),
@@ -116,7 +115,7 @@ func setupTraceProvider(ctx context.Context, cfg Config, res *resource.Resource)
 }
 
 // setupMeterProvider creates and configures the meter provider
-func setupMeterProvider(ctx context.Context, cfg Config, res *resource.Resource) (*sdkmetric.MeterProvider, error) {
+func setupMeterProvider(ctx context.Context, cfg config.Telemetry, res *resource.Resource) (*sdkmetric.MeterProvider, error) {
 	// Create OTLP HTTP metric exporter
 	metricExporter, err := otlpmetrichttp.New(ctx,
 		otlpmetrichttp.WithEndpoint(cfg.OTLPEndpoint),

@@ -57,12 +57,6 @@ tasks:
       - run
       - run-testserver
 
-  demo:
-    desc: Run the complete demo (requires servers to be running)
-    cmds:
-      - echo "Running demo..."
-      - ./scripts/demo-proxy.sh
-
   test:
     desc: Run all tests
     cmds:
@@ -125,18 +119,6 @@ tasks:
       - go fmt ./...
       - goimports -w .
       - echo "✓ Format complete"
-
-  gen-keys:
-    desc: Generate new encryption keys
-    cmds:
-      - echo "Generating encryption keys..."
-      - go run scripts/gen-keys/main.go
-
-  rotate-keys:
-    desc: Rotate encryption keys
-    cmds:
-      - echo "Rotating encryption keys..."
-      - go run scripts/rotate-keys/main.go
 
   build-all:
     desc: Build for multiple platforms
