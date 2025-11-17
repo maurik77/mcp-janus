@@ -81,7 +81,7 @@ func TestMCPProxyEndpoint(t *testing.T) {
 			config := &config.Config{}
 
 			// Create gin engine
-			engine, err := NewGinEngine(config, mockAuth, mockMetadata, mockProxy, mockEncryption)
+			engine, err := NewGinEngine(config, mockAuth, mockMetadata, mockProxy, mockEncryption, createTestMetrics())
 			assert.NoError(t, err)
 
 			// Create test request
@@ -130,7 +130,7 @@ func TestMCPProxyEndpointWithValidAuth(t *testing.T) {
 	config := &config.Config{}
 
 	// Create gin engine
-	engine, err := NewGinEngine(config, mockAuth, mockMetadata, mockProxy, mockEncryption)
+	engine, err := NewGinEngine(config, mockAuth, mockMetadata, mockProxy, mockEncryption, createTestMetrics())
 	assert.NoError(t, err)
 
 	// Test that the endpoint exists and responds
@@ -174,7 +174,7 @@ func TestMCPProxyEndpointCatchAll(t *testing.T) {
 			config := &config.Config{}
 
 			// Create gin engine
-			engine, err := NewGinEngine(config, mockAuth, mockMetadata, mockProxy, mockEncryption)
+			engine, err := NewGinEngine(config, mockAuth, mockMetadata, mockProxy, mockEncryption, createTestMetrics())
 			assert.NoError(t, err)
 
 			// Create test request

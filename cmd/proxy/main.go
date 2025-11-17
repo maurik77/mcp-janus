@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"mcpproxy/internal/infrastructure/config"
+	"mcpproxy/internal/infrastructure/telemetry"
 	"mcpproxy/internal/infrastructure/wire"
 	"mcpproxy/internal/server"
 	"mcpproxy/internal/service/auth"
@@ -23,6 +24,43 @@ func main() {
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
+	}
+
+	// Initialize OpenTelemetry
+	ctx := context.Background()
+	telemetryConfig := telemetry.Config{
+		ServiceName:    cfg.Telemetry.ServiceName,
+		ServiceVersion: cfg.Telemetry.ServiceVersion,
+		OTLPEndpoint:   cfg.Telemetry.OTLPEndpoint,
+		Enabled:        cfg.Telemetry.Enabled,
+	}
+
+	if telemetryConfig.ServiceName == "" {
+		telemetryConfig.ServiceName = "mcp-proxy"
+	}
+	if telemetryConfig.ServiceVersion == "" {
+		telemetryConfig.ServiceVersion = "1.0.0"
+	}
+	if telemetryConfig.OTLPEndpoint == "" {
+		telemetryConfig.OTLPEndpoint = "localhost:4318"
+	}
+
+	telem, err := telemetry.Initialize(ctx, telemetryConfig)
+	if err != nil {
+		log.Fatalf("Failed to initialize telemetry: %v", err)
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := telem.Shutdown(shutdownCtx); err != nil {
+			log.Printf("Error shutting down telemetry: %v", err)
+		}
+	}()
+
+	// Initialize metrics
+	metrics, err := telemetry.InitializeMetrics(telem.Meter)
+	if err != nil {
+		log.Fatalf("Failed to initialize metrics: %v", err)
 	}
 
 	encryption, err := utility.NewEncryption(cfg)
@@ -45,7 +83,7 @@ func main() {
 		log.Fatalf("Failed to initialize proxy: %v", err)
 	}
 
-	r, err := wire.NewGinEngine(cfg, authService, metadataService, proxy, encryption)
+	r, err := wire.NewGinEngine(cfg, authService, metadataService, proxy, encryption, metrics)
 	if err != nil {
 		log.Fatalf("Failed to initialize Gin engine: %v", err)
 	}

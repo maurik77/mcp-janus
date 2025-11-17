@@ -52,6 +52,7 @@ Implement a secure proxy that:
 - **Configuration-Driven**: YAML-based configuration with environment variable overrides
 - **Testable**: Comprehensive test suite with mocks and table-driven tests
 - **Production-Ready**: Graceful shutdown, health checks, structured logging
+- **OpenTelemetry Integration**: Full observability with distributed tracing and metrics
 
 ## 🏗️ Architecture
 
@@ -125,6 +126,12 @@ idp:
 encryption:
   master_key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
 
+telemetry:
+  enabled: true
+  service_name: mcp-proxy
+  service_version: 1.0.0
+  otlp_endpoint: localhost:4318
+
 upstream:
   name: my-mcp-server
   resource: https://mcp.example.com
@@ -189,6 +196,40 @@ task test-testserver
 - **No Dependencies**: Runs standalone for easy testing
 
 See [Testing Guide](docs/testing-guide.md) and [Test Server README](cmd/mcpserver/README.md) for details.
+
+## 📊 Observability
+
+The MCP Proxy includes comprehensive **OpenTelemetry** integration for distributed tracing and metrics.
+
+### Quick Start with Observability
+
+```bash
+# Start observability stack (Jaeger, Prometheus, Grafana, OpenTelemetry Collector)
+docker-compose -f docker-compose.observability.yaml up -d
+
+# Start the proxy with telemetry enabled (default)
+task run
+
+# Access observability tools
+open http://localhost:16686  # Jaeger - Distributed Traces
+open http://localhost:9090   # Prometheus - Metrics
+open http://localhost:3000   # Grafana - Dashboards (admin/admin)
+```
+
+### What's Instrumented
+
+- **Distributed Tracing**: Automatic HTTP tracing + custom spans for auth flows, token operations, and proxy forwarding
+- **Business Metrics**: Counters and histograms for authentication, token exchange, proxy requests, and upstream calls
+- **Context Propagation**: W3C Trace Context for end-to-end tracing
+
+### Key Metrics
+
+- `mcp.proxy.auth.requests.total` - Authentication requests
+- `mcp.proxy.token.exchange.duration` - Token exchange latency
+- `mcp.proxy.requests.total` - Proxy requests by method/path/status
+- `mcp.proxy.upstream.errors.total` - Upstream errors
+
+See [OpenTelemetry Documentation](docs/opentelemetry.md) for detailed configuration and usage.
 
 ## 📖 API Endpoints
 

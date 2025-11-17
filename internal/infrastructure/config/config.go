@@ -30,13 +30,21 @@ type Proxy struct {
 	TLSKeyFile  string `mapstructure:"tls_key_file"`
 }
 
+type Telemetry struct {
+	Enabled        bool   `mapstructure:"enabled"`
+	ServiceName    string `mapstructure:"service_name"`
+	ServiceVersion string `mapstructure:"service_version"`
+	OTLPEndpoint   string `mapstructure:"otlp_endpoint"`
+}
+
 type Config struct {
 	Proxy      Proxy `mapstructure:"proxy"`
 	IDP        IDP   `mapstructure:"idp"`
 	Encryption struct {
 		MasterKey string `mapstructure:"master_key"`
 	} `mapstructure:"encryption"`
-	Upstream Upstream `mapstructure:"upstream"`
+	Upstream  Upstream  `mapstructure:"upstream"`
+	Telemetry Telemetry `mapstructure:"telemetry"`
 }
 
 func (c *Config) EncryptionKey() [32]byte {
@@ -79,6 +87,14 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	err = viper.BindEnv("proxy.tls_key_file", "MCP_TLS_KEY_FILE")
+	if err != nil {
+		return nil, err
+	}
+	err = viper.BindEnv("telemetry.enabled", "MCP_TELEMETRY_ENABLED")
+	if err != nil {
+		return nil, err
+	}
+	err = viper.BindEnv("telemetry.otlp_endpoint", "MCP_TELEMETRY_OTLP_ENDPOINT")
 	if err != nil {
 		return nil, err
 	}
