@@ -19,6 +19,7 @@ Just as ancient Romans invoked Janus at the start of any endeavor, this proxy in
 ## 🎯 Project Goal
 
 Implement a secure proxy that:
+
 - ✅ Issues **opaque bearer tokens** to MCP clients (not passthrough)
 - ✅ Implements **OAuth 2.0 / OAuth 2.1** flows with PKCE
 - ✅ Uses **AEAD encryption** (AES-256-GCM) for token security
@@ -56,7 +57,7 @@ Implement a secure proxy that:
 
 ## 🏗️ Architecture
 
-```
+``` text
 ┌─────────────┐
 │ MCP Client  │ ← Receives opaque bearer token
 └──────┬──────┘

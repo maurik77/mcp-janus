@@ -9,10 +9,12 @@ Successfully integrated comprehensive OpenTelemetry observability into the MCP P
 ### 1. Core Telemetry Infrastructure
 
 **Files Created:**
+
 - `internal/infrastructure/telemetry/telemetry.go` - OpenTelemetry initialization and configuration
 - `internal/infrastructure/telemetry/metrics.go` - Business metrics definitions and recording functions
 
 **Capabilities:**
+
 - OTLP HTTP exporter for traces and metrics
 - Configurable service name and version
 - Graceful shutdown with context timeout
@@ -24,6 +26,7 @@ Successfully integrated comprehensive OpenTelemetry observability into the MCP P
 **Instrumented Components:**
 
 **Authentication Service** (`internal/service/auth/impl.go`):
+
 - `auth.RegisterClient` - Client registration with redirect URI validation
 - `auth.AuthenticateRequest` - Authorization request processing
 - `auth.RetrieveAccessToken` - Token exchange with IdP
@@ -31,24 +34,28 @@ Successfully integrated comprehensive OpenTelemetry observability into the MCP P
 - Events: "Token received from IdP"
 
 **Proxy Server** (`internal/server/impl.go`):
+
 - `proxy.AuthMiddleware` - Token validation and JWT verification
 - `proxy.ProxyHandler` - Request forwarding to upstream
 - Span attributes: `http.method`, `http.path`, `http.status_code`, `user.id`, `upstream.*`
 - Events: "Token extracted", "Token decrypted", "JWT validated", "Forwarding request to upstream"
 
 **HTTP Layer** (`internal/infrastructure/wire/gin.go`):
+
 - Automatic HTTP tracing via `otelgin` middleware
 - Request context propagation
 
 ### 3. Business Metrics
 
 **Authentication Metrics:**
+
 - `mcp.proxy.auth.requests.total` - Counter with `client.id` label
 - `mcp.proxy.auth.success.total` - Counter with `client.id` label
 - `mcp.proxy.auth.failure.total` - Counter with `client.id`, `reason` labels
 - `mcp.proxy.client.registration.total` - Counter with `success` label
 
 **Token Metrics:**
+
 - `mcp.proxy.token.exchange.total` - Counter with `success` label
 - `mcp.proxy.token.exchange.duration` - Histogram (milliseconds)
 - `mcp.proxy.token.validation.total` - Counter with `success` label
@@ -56,6 +63,7 @@ Successfully integrated comprehensive OpenTelemetry observability into the MCP P
 - `mcp.proxy.token.decryption.failures.total` - Counter
 
 **Proxy Metrics:**
+
 - `mcp.proxy.requests.total` - Counter with `http.method`, `http.path`, `http.status_code` labels
 - `mcp.proxy.request.duration` - Histogram with `http.method` label (milliseconds)
 - `mcp.proxy.errors.total` - Counter with `error.type` label
@@ -65,6 +73,7 @@ Successfully integrated comprehensive OpenTelemetry observability into the MCP P
 ### 4. Configuration
 
 **Config Structure** (`internal/infrastructure/config/config.go`):
+
 ```go
 type Telemetry struct {
     Enabled        bool   `mapstructure:"enabled"`
@@ -75,10 +84,12 @@ type Telemetry struct {
 ```
 
 **Environment Variables:**
+
 - `MCP_TELEMETRY_ENABLED` - Enable/disable telemetry
 - `MCP_TELEMETRY_OTLP_ENDPOINT` - OTLP collector endpoint
 
 **Default Values:**
+
 - Service Name: `mcp-proxy`
 - Service Version: `1.0.0`
 - OTLP Endpoint: `localhost:4318`
@@ -86,6 +97,7 @@ type Telemetry struct {
 ### 5. Main Application Integration
 
 **Updated** `cmd/proxy/main.go`:
+
 - Initialize telemetry on startup
 - Create metrics instances
 - Pass metrics to Gin engine
@@ -94,6 +106,7 @@ type Telemetry struct {
 ### 6. Testing Support
 
 **Test Infrastructure:**
+
 - Created `createTestMetrics()` helper using noop meter
 - Updated all wire tests to include metrics parameter
 - All existing tests pass without modification
@@ -101,6 +114,7 @@ type Telemetry struct {
 ### 7. Documentation
 
 **Created:**
+
 - `docs/opentelemetry.md` - Comprehensive OpenTelemetry guide
 - `docker-compose.observability.yaml` - Local observability stack
 - `otel-collector-config.yaml` - OpenTelemetry Collector configuration
@@ -109,7 +123,7 @@ type Telemetry struct {
 
 ## Dependencies Added
 
-```
+``` text
 go.opentelemetry.io/otel v1.38.0
 go.opentelemetry.io/otel/trace v1.38.0
 go.opentelemetry.io/otel/metric v1.38.0
@@ -122,11 +136,13 @@ go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin v0.
 ## Security Considerations
 
 ✅ **No sensitive data in traces/metrics:**
+
 - Token values are never logged
 - Secrets are excluded from span attributes
 - Only metadata (client IDs, methods, paths) are recorded
 
 ✅ **Production-ready settings:**
+
 - Configurable sampling (currently 100%, adjust for production)
 - Batch processing to reduce overhead
 - Timeout controls on all operations
@@ -156,6 +172,7 @@ docker-compose -f docker-compose.observability.yaml up -d
 ### Configuration
 
 Add to `config.yaml`:
+
 ```yaml
 telemetry:
   enabled: true
@@ -165,6 +182,7 @@ telemetry:
 ```
 
 Or use environment variables:
+
 ```bash
 export MCP_TELEMETRY_ENABLED=true
 export MCP_TELEMETRY_OTLP_ENDPOINT=localhost:4318

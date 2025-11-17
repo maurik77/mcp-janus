@@ -43,6 +43,7 @@ telemetry:
 ### Environment Variables
 
 You can also configure via environment variables:
+
 - `MCP_TELEMETRY_ENABLED` - Enable/disable telemetry (true/false)
 - `MCP_TELEMETRY_OTLP_ENDPOINT` - OTLP endpoint (e.g., `localhost:4318`)
 
@@ -50,7 +51,7 @@ You can also configure via environment variables:
 
 ### Span Hierarchy
 
-```
+``` text
 HTTP Request (otelgin middleware)
 ├─ proxy.AuthMiddleware
 │  ├─ Token extraction
@@ -77,6 +78,7 @@ auth.RetrieveAccessToken
 ### Span Attributes
 
 All spans include relevant attributes:
+
 - `http.method`, `http.path`, `http.status_code` - HTTP request details
 - `client.id` - OAuth client identifier
 - `user.id` - Authenticated user (from JWT sub claim)
@@ -86,6 +88,7 @@ All spans include relevant attributes:
 ### Events
 
 Key events recorded in spans:
+
 - "Token extracted"
 - "Token decrypted"
 - "JWT validated"
@@ -165,6 +168,7 @@ service:
 ```
 
 Run the collector:
+
 ```bash
 docker run -p 4318:4318 -p 4317:4317 -p 8889:8889 \
   -v $(pwd)/otel-collector-config.yaml:/etc/otel-collector-config.yaml \
@@ -221,6 +225,7 @@ docker run -d --name grafana \
 ### Security
 
 1. **TLS Configuration**: Enable TLS for OTLP endpoints in production:
+
    ```go
    otlptracehttp.WithTLSClientConfig(&tls.Config{...})
    ```
@@ -232,6 +237,7 @@ docker run -d --name grafana \
 ### Performance
 
 1. **Sampling**: Configure trace sampling in production:
+
    ```go
    sdktrace.WithSampler(sdktrace.TraceIDRatioBased(0.1)) // 10% sampling
    ```
@@ -284,6 +290,7 @@ sum by (reason) (rate(mcp_proxy_auth_failure_total[5m]))
 1. Start the proxy with telemetry enabled
 2. Make test requests
 3. Check collector logs for received spans/metrics:
+
    ```bash
    docker logs otel-collector
    ```
@@ -291,6 +298,7 @@ sum by (reason) (rate(mcp_proxy_auth_failure_total[5m]))
 ### Local Testing
 
 Use the provided Docker Compose for local testing:
+
 ```bash
 docker-compose up -d jaeger prometheus grafana otel-collector
 ```
@@ -307,6 +315,7 @@ docker-compose up -d jaeger prometheus grafana otel-collector
 ### High cardinality metrics
 
 Avoid high-cardinality labels (e.g., full URLs, user IDs in labels). Current implementation uses:
+
 - HTTP methods (low cardinality)
 - HTTP paths (controlled cardinality)
 - Status codes (low cardinality)
@@ -314,6 +323,7 @@ Avoid high-cardinality labels (e.g., full URLs, user IDs in labels). Current imp
 ### Performance impact
 
 Typical overhead: 1-3% CPU, <50MB memory. If higher:
+
 1. Reduce sampling rate
 2. Increase batch intervals
 3. Disable metrics if only traces are needed
