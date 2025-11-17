@@ -21,6 +21,13 @@ type proxy struct {
 	encryption utility.Encryption
 }
 
+type key int
+
+const (
+	keyRealToken key = iota
+	keyUpstream
+)
+
 func NewProxy(cfg config.Config,
 	metadata metadata.Service,
 	auth auth.Service,
@@ -63,7 +70,7 @@ func (p *proxy) AuthMiddleware() func(http.Handler) http.Handler {
 				panic("cannot parse claims")
 			}
 
-			ctx := context.WithValue(r.Context(), "real_token", token)
+			ctx := context.WithValue(r.Context(), keyRealToken, token)
 
 			for source, dest := range p.cfg.IDP.ClaimsMapping {
 				if value, exists := claims[source]; exists {
@@ -71,7 +78,7 @@ func (p *proxy) AuthMiddleware() func(http.Handler) http.Handler {
 				}
 			}
 
-			ctx = context.WithValue(ctx, "upstream", p.cfg.Upstream)
+			ctx = context.WithValue(ctx, keyUpstream, p.cfg.Upstream)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}

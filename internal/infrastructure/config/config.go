@@ -58,13 +58,30 @@ func Load() (*Config, error) {
 
 	viper.AutomaticEnv()
 	viper.SetEnvPrefix("MCP")
-	viper.BindEnv("proxy.base_url", "MCP_PROXY_BASE_URL")
-	viper.BindEnv("idp.client_secret", "MCP_IDP_CLIENT_SECRET")
-	viper.BindEnv("proxy.listen_addr", "MCP_LISTEN_ADDR")
-	viper.BindEnv("proxy.tls", "MCP_TLS")
-	viper.BindEnv("proxy.tls_cert_file", "MCP_TLS_CERT_FILE")
-	viper.BindEnv("proxy.tls_key_file", "MCP_TLS_KEY_FILE")
-
+	err := viper.BindEnv("proxy.base_url", "MCP_PROXY_BASE_URL")
+	if err != nil {
+		return nil, err
+	}
+	err = viper.BindEnv("idp.client_secret", "MCP_IDP_CLIENT_SECRET")
+	if err != nil {
+		return nil, err
+	}
+	err = viper.BindEnv("proxy.listen_addr", "MCP_LISTEN_ADDR")
+	if err != nil {
+		return nil, err
+	}
+	err = viper.BindEnv("proxy.tls", "MCP_TLS")
+	if err != nil {
+		return nil, err
+	}
+	err = viper.BindEnv("proxy.tls_cert_file", "MCP_TLS_CERT_FILE")
+	if err != nil {
+		return nil, err
+	}
+	err = viper.BindEnv("proxy.tls_key_file", "MCP_TLS_KEY_FILE")
+	if err != nil {
+		return nil, err
+	}
 	if err := viper.ReadInConfig(); err != nil {
 		return nil, err
 	}

@@ -51,24 +51,11 @@ tasks:
       - echo "Starting MCP test server on port 8081..."
       - go run {{.TEST_SERVER_PATH}}
 
-  test-testserver:
-    desc: Run tests against the MCP test server
-    deps: [build-testserver]
-    cmds:
-      - echo "Testing MCP server..."
-      - ./scripts/test-mcpserver.sh
-
   start-all:
     desc: Start both MCP test server and proxy
-    cmds:
-      - echo "Starting test environment..."
-      - ./scripts/start-servers.sh
-
-  stop-all:
-    desc: Stop both MCP test server and proxy
-    cmds:
-      - echo "Stopping servers..."
-      - ./scripts/stop-servers.sh
+    deps:
+      - run
+      - run-testserver
 
   demo:
     desc: Run the complete demo (requires servers to be running)
@@ -103,31 +90,17 @@ tasks:
   run:
     desc: Build and run the proxy server (development mode)
     deps: [build]
-    vars:
-      CLIENT_SECRET:
-        sh: 'bash -c ''read -s -p "Enter MCP_IDP_CLIENT_SECRET: " secret && echo $secret'''
-    platforms: [linux, darwin]
     env:
       PROXY_URL: "http://localhost:8080"
       UPSTREAM_MCP_URL: "http://localhost:8081"
       MCP_IDP_CLIENT_SECRET: "{{.CLIENT_SECRET}}"
     cmds:
       - echo "Starting MCP proxy server..."
-      - go run {{.MAIN_PATH}}
-  
-  run:windows:
-    desc: Build and run the proxy server (development mode - Windows)
-    deps: [build]
-    vars:
-      CLIENT_SECRET:
-        sh: pwsh -Command "Read-Host -Prompt 'Enter MCP_IDP_CLIENT_SECRET' -AsSecureString | ConvertFrom-SecureString -AsPlainText"
-    platforms: [windows]
-    env:
-      PROXY_URL: "http://localhost:8080"
-      UPSTREAM_MCP_URL: "http://localhost:8081"
-      MCP_IDP_CLIENT_SECRET: "{{.CLIENT_SECRET}}"
-    cmds:
-      - echo "Starting MCP proxy server..."
+      - |
+        if [ -z "$MCP_IDP_CLIENT_SECRET" ]; then
+          echo "Error: MCP_IDP_CLIENT_SECRET environment variable is not set"
+          exit 1
+        fi
       - go run {{.MAIN_PATH}}
 
   install:
