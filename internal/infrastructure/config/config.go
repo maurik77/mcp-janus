@@ -3,6 +3,7 @@ package config
 
 import (
 	"encoding/hex"
+	"time"
 
 	"github.com/spf13/viper"
 )
@@ -20,6 +21,7 @@ type IDP struct {
 	OpenIDConfigurationURL string            `mapstructure:"openid_configuration_url"`
 	Scopes                 []string          `mapstructure:"scopes"`
 	ClaimsMapping          map[string]string `mapstructure:"claims_mapping"`
+	JWTLeeway              time.Duration     `mapstructure:"jwt_leeway"`
 }
 
 type Proxy struct {

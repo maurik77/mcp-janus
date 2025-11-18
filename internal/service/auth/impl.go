@@ -61,7 +61,7 @@ func New(cfg config.Config, encryption utility.Encryption) (Service, error) {
 }
 
 func (s *ProxyAuthHandler) RegisterClient(req *RegisterRequest) (*RegisterResponse, error) {
-	ctx, span := s.tracer.Start(context.Background(), "auth.RegisterClient")
+	_, span := s.tracer.Start(context.Background(), "auth.RegisterClient")
 	defer span.End()
 
 	if req != nil && len(req.RedirectURIs) > 0 {
@@ -84,14 +84,11 @@ func (s *ProxyAuthHandler) RegisterClient(req *RegisterRequest) (*RegisterRespon
 		ClientSecret: secret,
 	}
 
-	// Suppress unused variable warning
-	_ = ctx
-
 	return &res, nil
 }
 
 func (s *ProxyAuthHandler) AuthenticateRequest(req *AuthenticateRequest) (string, error) {
-	ctx, span := s.tracer.Start(context.Background(), "auth.AuthenticateRequest")
+	_, span := s.tracer.Start(context.Background(), "auth.AuthenticateRequest")
 	defer span.End()
 
 	if req == nil || req.ClientID == "" {
@@ -134,9 +131,6 @@ func (s *ProxyAuthHandler) AuthenticateRequest(req *AuthenticateRequest) (string
 	)
 
 	span.SetStatus(codes.Ok, "Authentication request successful")
-
-	// Suppress unused variable warning
-	_ = ctx
 
 	return authURL, nil
 }
@@ -264,7 +258,13 @@ func (s *ProxyAuthHandler) ValidateJWT(tokenString string) (*jwt.Token, error) {
 		return nil, fmt.Errorf("key not found")
 	}
 
-	token, err := jwt.Parse(tokenString, keyFunc)
+	options := []jwt.ParserOption{}
+
+	if s.config.IDP.JWTLeeway > 0 {
+		options = append(options, jwt.WithLeeway(s.config.IDP.JWTLeeway))
+	}
+
+	token, err := jwt.Parse(tokenString, keyFunc, options...)
 	if err != nil {
 		return nil, err
 	}
