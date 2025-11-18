@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"mcpproxy/internal/infrastructure/config"
+	"mcpproxy/internal/infrastructure/telemetry"
 	"mcpproxy/internal/infrastructure/wire"
 	"mcpproxy/internal/server"
 	"mcpproxy/internal/service/auth"
@@ -23,6 +24,21 @@ func main() {
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
+	}
+
+	// Initialize OpenTelemetry
+	ctx := context.Background()
+
+	telem, shutdownTelemetry, err := telemetry.Initialize(ctx, cfg.Telemetry)
+	if err != nil {
+		log.Fatalf("Failed to initialize telemetry: %v", err)
+	}
+	defer shutdownTelemetry()
+
+	// Initialize metrics
+	metrics, err := telemetry.InitializeMetrics(telem.Meter)
+	if err != nil {
+		log.Fatalf("Failed to initialize metrics: %v", err)
 	}
 
 	encryption, err := utility.NewEncryption(cfg)
@@ -45,7 +61,7 @@ func main() {
 		log.Fatalf("Failed to initialize proxy: %v", err)
 	}
 
-	r, err := wire.NewGinEngine(cfg, authService, metadataService, proxy, encryption)
+	r, err := wire.NewGinEngine(cfg, authService, metadataService, proxy, encryption, metrics)
 	if err != nil {
 		log.Fatalf("Failed to initialize Gin engine: %v", err)
 	}

@@ -19,6 +19,9 @@ idp:
 encryption:
   master_key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
 
+telemetry:
+  enabled: false
+
 upstream:
   name: weather-test
   resource: http://localhost:8081

@@ -18,7 +18,14 @@ func fetchOpenIDConfiguration(url string) (*OpenIDConfiguration, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch OpenID configuration: %w", err)
 	}
-	defer resp.Body.Close()
+
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			// Log the error but don't override the main function error
+			// In a real implementation, you might want to use structured logging here
+			fmt.Printf("Error closing response body: %v\n", err)
+		}
+	}()
 
 	var config OpenIDConfiguration
 	if err := json.NewDecoder(resp.Body).Decode(&config); err != nil {

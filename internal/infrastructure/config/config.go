@@ -30,13 +30,21 @@ type Proxy struct {
 	TLSKeyFile  string `mapstructure:"tls_key_file"`
 }
 
+type Telemetry struct {
+	Enabled        bool   `mapstructure:"enabled"`
+	ServiceName    string `mapstructure:"service_name"`
+	ServiceVersion string `mapstructure:"service_version"`
+	OTLPEndpoint   string `mapstructure:"otlp_endpoint"`
+}
+
 type Config struct {
 	Proxy      Proxy `mapstructure:"proxy"`
 	IDP        IDP   `mapstructure:"idp"`
 	Encryption struct {
 		MasterKey string `mapstructure:"master_key"`
 	} `mapstructure:"encryption"`
-	Upstream Upstream `mapstructure:"upstream"`
+	Upstream  Upstream  `mapstructure:"upstream"`
+	Telemetry Telemetry `mapstructure:"telemetry"`
 }
 
 func (c *Config) EncryptionKey() [32]byte {
@@ -58,16 +66,46 @@ func Load() (*Config, error) {
 
 	viper.AutomaticEnv()
 	viper.SetEnvPrefix("MCP")
-	viper.BindEnv("proxy.base_url", "MCP_PROXY_BASE_URL")
-	viper.BindEnv("idp.client_secret", "MCP_IDP_CLIENT_SECRET")
-	viper.BindEnv("proxy.listen_addr", "MCP_LISTEN_ADDR")
-	viper.BindEnv("proxy.tls", "MCP_TLS")
-	viper.BindEnv("proxy.tls_cert_file", "MCP_TLS_CERT_FILE")
-	viper.BindEnv("proxy.tls_key_file", "MCP_TLS_KEY_FILE")
-
+	err := viper.BindEnv("proxy.base_url", "MCP_PROXY_BASE_URL")
+	if err != nil {
+		return nil, err
+	}
+	err = viper.BindEnv("idp.client_secret", "MCP_IDP_CLIENT_SECRET")
+	if err != nil {
+		return nil, err
+	}
+	err = viper.BindEnv("proxy.listen_addr", "MCP_LISTEN_ADDR")
+	if err != nil {
+		return nil, err
+	}
+	err = viper.BindEnv("proxy.tls", "MCP_TLS")
+	if err != nil {
+		return nil, err
+	}
+	err = viper.BindEnv("proxy.tls_cert_file", "MCP_TLS_CERT_FILE")
+	if err != nil {
+		return nil, err
+	}
+	err = viper.BindEnv("proxy.tls_key_file", "MCP_TLS_KEY_FILE")
+	if err != nil {
+		return nil, err
+	}
+	err = viper.BindEnv("telemetry.enabled", "MCP_TELEMETRY_ENABLED")
+	if err != nil {
+		return nil, err
+	}
+	err = viper.BindEnv("telemetry.otlp_endpoint", "MCP_TELEMETRY_OTLP_ENDPOINT")
+	if err != nil {
+		return nil, err
+	}
 	if err := viper.ReadInConfig(); err != nil {
 		return nil, err
 	}
+
+	viper.SetDefault("telemetry.otlp_endpoint", "localhost:4317")
+	viper.SetDefault("telemetry.service_name", "mcp-proxy")
+	viper.SetDefault("telemetry.service_version", "1.0.0")
+	viper.SetDefault("telemetry.enabled", true)
 
 	var cfg Config
 	if err := viper.Unmarshal(&cfg); err != nil {

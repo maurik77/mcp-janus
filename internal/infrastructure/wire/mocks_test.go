@@ -1,12 +1,14 @@
 package wire
 
 import (
+	"mcpproxy/internal/infrastructure/telemetry"
 	"mcpproxy/internal/service/auth"
 	"net/http"
 	"net/url"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/mock"
+	"go.opentelemetry.io/otel/metric/noop"
 	"golang.org/x/oauth2"
 )
 
@@ -92,4 +94,11 @@ func (m *MockEncryption) Encrypt(data []byte) (string, error) {
 func (m *MockEncryption) Decrypt(encrypted string) ([]byte, error) {
 	args := m.Called(encrypted)
 	return args.Get(0).([]byte), args.Error(1)
+}
+
+// createTestMetrics creates a no-op metrics instance for testing
+func createTestMetrics() *telemetry.Metrics {
+	meter := noop.NewMeterProvider().Meter("test")
+	metrics, _ := telemetry.InitializeMetrics(meter)
+	return metrics
 }

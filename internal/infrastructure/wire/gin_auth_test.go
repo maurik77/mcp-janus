@@ -78,7 +78,7 @@ func TestAuthHandler(t *testing.T) {
 			config := &config.Config{}
 
 			// Create gin engine
-			engine, err := NewGinEngine(config, mockAuth, mockMetadata, mockProxy, mockEncryption)
+			engine, err := NewGinEngine(config, mockAuth, mockMetadata, mockProxy, mockEncryption, createTestMetrics())
 			assert.NoError(t, err)
 
 			// Build URL with query parameters
@@ -139,7 +139,7 @@ func TestAuthHandlerInvalidRequest(t *testing.T) {
 	config := &config.Config{}
 
 	// Create gin engine
-	engine, err := NewGinEngine(config, mockAuth, mockMetadata, mockProxy, mockEncryption)
+	engine, err := NewGinEngine(config, mockAuth, mockMetadata, mockProxy, mockEncryption, createTestMetrics())
 	assert.NoError(t, err)
 
 	// Create test request with invalid parameters (missing required fields)

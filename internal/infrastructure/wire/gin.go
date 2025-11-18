@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"mcpproxy/internal/infrastructure/config"
+	"mcpproxy/internal/infrastructure/telemetry"
 	"mcpproxy/internal/server"
 	"mcpproxy/internal/service/auth"
 	"mcpproxy/internal/service/metadata"
@@ -13,13 +14,21 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
+)
+
+type contextKey int
+
+const (
+	metricsKey contextKey = iota
 )
 
 func NewGinEngine(config *config.Config,
 	authService auth.Service,
 	metadataService metadata.Service,
 	proxy server.Proxy,
-	encryption utility.Encryption) (*gin.Engine, error) {
+	encryption utility.Encryption,
+	metrics *telemetry.Metrics) (*gin.Engine, error) {
 	if os.Getenv("GIN_MODE") == "" {
 		gin.SetMode(gin.ReleaseMode)
 	}
@@ -29,10 +38,20 @@ func NewGinEngine(config *config.Config,
 	r.Use(gin.Logger())
 	r.Use(gin.Recovery())
 
+	// OpenTelemetry middleware
+	r.Use(otelgin.Middleware("mcp-proxy"))
+
 	// Custom timeout middleware
 	r.Use(func(c *gin.Context) {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
 		defer cancel()
+		c.Request = c.Request.WithContext(ctx)
+		c.Next()
+	})
+
+	// Metrics middleware - inject metrics into context
+	r.Use(func(c *gin.Context) {
+		ctx := context.WithValue(c.Request.Context(), metricsKey, metrics)
 		c.Request = c.Request.WithContext(ctx)
 		c.Next()
 	})
@@ -71,6 +90,7 @@ func NewGinEngine(config *config.Config,
 
 func authHandler(authService auth.Service) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		metrics := c.Request.Context().Value(metricsKey).(*telemetry.Metrics)
 		req := &auth.AuthenticateRequest{}
 		err := c.Bind(req)
 
@@ -79,13 +99,17 @@ func authHandler(authService auth.Service) gin.HandlerFunc {
 			return
 		}
 
+		metrics.RecordAuthRequest(c.Request.Context(), req.ClientID)
+
 		authURL, err := authService.AuthenticateRequest(req)
 
 		if err != nil {
+			metrics.RecordAuthFailure(c.Request.Context(), req.ClientID, "authentication_failed")
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "server_error"})
 			return
 		}
 
+		metrics.RecordAuthSuccess(c.Request.Context(), req.ClientID)
 		c.Redirect(http.StatusFound, authURL)
 	}
 }
@@ -120,6 +144,7 @@ func callbackHandler(authService auth.Service) gin.HandlerFunc {
 // tokenHandler: client → Proxy
 func tokenHandler(authHandler auth.Service) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		metrics := c.Request.Context().Value(metricsKey).(*telemetry.Metrics)
 		req := &auth.AccessTokenRequest{}
 		err := c.Bind(req)
 
@@ -128,13 +153,17 @@ func tokenHandler(authHandler auth.Service) gin.HandlerFunc {
 			return
 		}
 
+		start := time.Now()
 		opaqueToken, err := authHandler.RetrieveAccessToken(req)
+		duration := time.Since(start)
 
 		if err != nil {
+			metrics.RecordTokenExchange(c.Request.Context(), duration, false)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "server_error"})
 			return
 		}
 
+		metrics.RecordTokenExchange(c.Request.Context(), duration, true)
 		c.JSON(http.StatusOK, opaqueToken)
 	}
 }
@@ -148,8 +177,10 @@ func refreshHandler(_ auth.Service) gin.HandlerFunc {
 
 func registerHandler(authHandler auth.Service) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		metrics := c.Request.Context().Value(metricsKey).(*telemetry.Metrics)
 		req := &auth.RegisterRequest{}
 		if err := json.NewDecoder(c.Request.Body).Decode(req); err != nil {
+			metrics.RecordClientRegistration(c.Request.Context(), false)
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request"})
 			return
 		}
@@ -157,10 +188,12 @@ func registerHandler(authHandler auth.Service) gin.HandlerFunc {
 		res, err := authHandler.RegisterClient(req)
 
 		if err != nil {
+			metrics.RecordClientRegistration(c.Request.Context(), false)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "server_error"})
 			return
 		}
 
+		metrics.RecordClientRegistration(c.Request.Context(), true)
 		c.JSON(http.StatusOK, res)
 	}
 }

@@ -62,7 +62,7 @@ func TestRefreshHandler(t *testing.T) {
 			config := &config.Config{}
 
 			// Create gin engine
-			engine, err := NewGinEngine(config, mockAuth, mockMetadata, mockProxy, mockEncryption)
+			engine, err := NewGinEngine(config, mockAuth, mockMetadata, mockProxy, mockEncryption, createTestMetrics())
 			assert.NoError(t, err)
 
 			// Create test request
@@ -101,7 +101,7 @@ func TestRefreshHandlerDifferentMethods(t *testing.T) {
 	config := &config.Config{}
 
 	// Create gin engine
-	engine, err := NewGinEngine(config, mockAuth, mockMetadata, mockProxy, mockEncryption)
+	engine, err := NewGinEngine(config, mockAuth, mockMetadata, mockProxy, mockEncryption, createTestMetrics())
 	assert.NoError(t, err)
 
 	tests := []struct {
