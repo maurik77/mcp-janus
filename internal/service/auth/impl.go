@@ -192,7 +192,7 @@ func (s *ProxyAuthHandler) RetrieveAccessToken(req *AccessTokenRequest) (*oauth2
 	token, err := s.oauthConfig.Exchange(
 		ctx,
 		req.Code,
-		oauth2.SetAuthURLParam("grant_type", "authorization_code"),
+		oauth2.SetAuthURLParam("grant_type", req.GrantTypes),
 		oauth2.SetAuthURLParam("code_verifier", req.CodeVerifier),
 	)
 

@@ -39,6 +39,7 @@ type AccessTokenRequest struct {
 	ClientSecret string `json:"client_secret" form:"client_secret"`
 	CodeVerifier string `json:"code_verifier" form:"code_verifier"`
 	ClientID     string `json:"client_id" form:"client_id"`
+	GrantTypes   string `json:"grant_type" form:"grant_type"`
 }
 
 type ClientIdData struct {

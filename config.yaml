@@ -9,6 +9,7 @@ idp:
   jwt_leeway: 60s  # in seconds
   scopes:
     - openid
+    - offline_access
     - profile
     - 379eab96-a9ad-401f-8158-19b130fefbf3
   claims_mapping:
