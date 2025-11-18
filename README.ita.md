@@ -53,10 +53,11 @@ Implementare un proxy sicuro che:
 - **Configurazione Guidata**: Configurazione basata su YAML con override delle variabili d'ambiente
 - **Testabile**: Suite di test completa con mock e test table-driven
 - **Pronto per la Produzione**: Shutdown graduale, health check, logging strutturato
+- **Integrazione OpenTelemetry**: Tracing distribuito completo e raccolta metriche
 
 ## 🏗️ Architettura
 
-```
+```text
 ┌─────────────┐
 │ MCP Client  │ ← Riceve il token bearer opaco
 └──────┬──────┘
@@ -113,18 +114,24 @@ proxy:
   listen_addr: ":8080"
 
 idp:
-  issuer_url: https://auth.example.com
   client_id: mcp-proxy-client
   client_secret: your-secret-here
-  authorization_endpoint: https://auth.example.com/oauth/authorize
-  token_endpoint: https://auth.example.com/oauth/token
+  openid_configuration_url: https://auth.example.com/.well-known/openid-configuration
+  scopes: ["openid", "profile", "email"]
   claims_mapping:
     sub: X-Sub
     name: X-Full-Name
     email: X-Email
+  jwt_leeway: 10s
 
 encryption:
   master_key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+
+telemetry:
+  enabled: true
+  service_name: mcp-proxy
+  service_version: 1.0.0
+  otlp_endpoint: localhost:4318
 
 upstream:
   name: my-mcp-server
@@ -160,6 +167,40 @@ task build
 curl http://localhost:8080/health
 # OK
 ```
+
+## 📊 Osservabilità
+
+Il Proxy MCP include un'integrazione completa **OpenTelemetry** per il tracing distribuito e le metriche.
+
+### Avvio Rapido con Osservabilità
+
+```bash
+# Avvia lo stack di osservabilità (Jaeger, Prometheus, Grafana, OpenTelemetry Collector)
+docker-compose -f docker-compose.observability.yaml up -d
+
+# Avvia il proxy con telemetria abilitata (default)
+task run
+
+# Accedi agli strumenti di osservabilità
+open http://localhost:16686  # Jaeger - Trace Distribuite
+open http://localhost:9090   # Prometheus - Metriche
+open http://localhost:3000   # Grafana - Dashboard (admin/admin)
+```
+
+### Cosa è Instrumentato
+
+- **Tracing Distribuito**: Tracing HTTP automatico tramite middleware `otelgin` + span personalizzati per flussi auth, operazioni token e inoltro proxy
+- **Metriche Business**: Contatori e istogrammi per autenticazione, scambio token, richieste proxy e chiamate upstream
+- **Propagazione Contesto**: W3C Trace Context per tracing end-to-end
+
+### Metriche Chiave
+
+- `mcp.proxy.auth.requests.total` - Richieste di autenticazione
+- `mcp.proxy.token.exchange.duration` - Latenza scambio token
+- `mcp.proxy.requests.total` - Richieste proxy per metodo/percorso/stato
+- `mcp.proxy.upstream.errors.total` - Errori upstream
+
+Vedere [Documentazione OpenTelemetry](docs/opentelemetry.md) per configurazione dettagliata e utilizzo.
 
 ## 📖 Endpoint API
 
@@ -245,7 +286,7 @@ Content-Type: application/x-www-form-urlencoded
 grant_type=refresh_token&refresh_token=<encrypted_refresh_token>&client_id=<encrypted_id>&client_secret=<secret>
 ```
 
-Nota: Attualmente restituisce 501 Not Implemented.
+**Nota: Attualmente restituisce 501 Not Implemented.** L'endpoint esiste ed è instradato, ma la logica del refresh token non è ancora implementata. Il metodo `RefreshToken` nel servizio auth restituisce un token vuoto.
 
 ### Proxy MCP
 
@@ -428,6 +469,8 @@ Comandi principali:
 - `task fmt` - Formattare il codice
 - `task build-testserver` - Compilare il server MCP di test
 - `task run-testserver` - Eseguire il server MCP di test
+- `task start-all` - Avviare sia proxy che server di test
+- `task build-all` - Compilare per piattaforme multiple
 
 ### Aggiunta di Nuove Funzionalità
 
@@ -518,7 +561,9 @@ Per problemi e domande:
 - [x] Documentazione (README, documenti design, diagrammi di flusso)
 - [x] Task runner per operazioni comuni
 - [x] Server MCP di test per testing di integrazione
-- [ ] Implementazione refresh token
+- [x] Integrazione OpenTelemetry (tracing distribuito e metriche)
+- [x] Stack di osservabilità (Jaeger, Prometheus, Grafana, OpenTelemetry Collector)
+- [x] Endpoint refresh token (restituisce 501 Not Implemented)
+- [ ] Implementazione refresh token (logica del servizio)
 - [ ] Rate limiting
-- [ ] Monitoraggio avanzato e metriche
 - [ ] Specifica OpenAPI
