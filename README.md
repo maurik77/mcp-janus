@@ -114,15 +114,15 @@ proxy:
   listen_addr: ":8080"
 
 idp:
-  issuer_url: https://auth.example.com
   client_id: mcp-proxy-client
   client_secret: your-secret-here
-  authorization_endpoint: https://auth.example.com/oauth/authorize
-  token_endpoint: https://auth.example.com/oauth/token
+  openid_configuration_url: https://auth.example.com/.well-known/openid-configuration
+  scopes: ["openid", "profile", "email"]
   claims_mapping:
     sub: X-Sub
     name: X-Full-Name
     email: X-Email
+  jwt_leeway: 10s
 
 encryption:
   master_key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
@@ -219,7 +219,7 @@ open http://localhost:3000   # Grafana - Dashboards (admin/admin)
 
 ### What's Instrumented
 
-- **Distributed Tracing**: Automatic HTTP tracing + custom spans for auth flows, token operations, and proxy forwarding
+- **Distributed Tracing**: Automatic HTTP tracing via `otelgin` middleware + custom spans for auth flows, token operations, and proxy forwarding
 - **Business Metrics**: Counters and histograms for authentication, token exchange, proxy requests, and upstream calls
 - **Context Propagation**: W3C Trace Context for end-to-end tracing
 
@@ -229,6 +229,18 @@ open http://localhost:3000   # Grafana - Dashboards (admin/admin)
 - `mcp.proxy.token.exchange.duration` - Token exchange latency
 - `mcp.proxy.requests.total` - Proxy requests by method/path/status
 - `mcp.proxy.upstream.errors.total` - Upstream errors
+
+### Telemetry Configuration
+
+```yaml
+telemetry:
+  enabled: true                    # Enable/disable OpenTelemetry
+  service_name: mcp-proxy          # Service name for traces/metrics
+  service_version: 1.0.0           # Service version
+  otlp_endpoint: localhost:4318    # OTLP HTTP endpoint
+```
+
+Environment variables: `MCP_TELEMETRY_ENABLED`, `MCP_TELEMETRY_OTLP_ENDPOINT`
 
 See [OpenTelemetry Documentation](docs/opentelemetry.md) for detailed configuration and usage.
 
@@ -316,7 +328,7 @@ Content-Type: application/x-www-form-urlencoded
 grant_type=refresh_token&refresh_token=<encrypted_refresh_token>&client_id=<encrypted_id>&client_secret=<secret>
 ```
 
-Note: Currently returns 501 Not Implemented.
+**Note: Currently returns 501 Not Implemented.** The endpoint exists and is routed, but the refresh token logic is not yet implemented. The `RefreshToken` method in the auth service returns an empty token.
 
 ### MCP Proxy
 
@@ -499,6 +511,8 @@ Key commands:
 - `task fmt` - Format code
 - `task build-testserver` - Build test MCP server
 - `task run-testserver` - Run test MCP server
+- `task start-all` - Start both proxy and test server
+- `task build-all` - Build for multiple platforms
 
 ### Adding New Features
 
@@ -589,7 +603,9 @@ For issues and questions:
 - [x] Documentation (README, design docs, flow diagrams)
 - [x] Task runner for common operations
 - [x] Test MCP server for integration testing
-- [ ] Refresh token implementation
+- [x] OpenTelemetry integration (distributed tracing and metrics)
+- [x] Observability stack (Jaeger, Prometheus, Grafana, OpenTelemetry Collector)
+- [x] Refresh token endpoint (returns 501 Not Implemented)
+- [ ] Refresh token implementation (service logic)
 - [ ] Rate limiting
-- [ ] Advanced monitoring and metrics
 - [ ] OpenAPI specification
