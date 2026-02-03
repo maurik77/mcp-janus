@@ -130,7 +130,10 @@ func (p *proxy) ProxyHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Build target URL
 	targetURL, _ := url.Parse(upstream.BaseURL)
-	targetURL.Path = upstream.PathPrefix + r.URL.Path
+
+	if upstream.PathPrefix != "" {
+		targetURL.Path = upstream.PathPrefix
+	}
 
 	span.SetAttributes(attribute.String("upstream.target_url", targetURL.String()))
 	span.AddEvent("Forwarding request to upstream")
@@ -150,12 +153,18 @@ func (p *proxy) ProxyHandler(w http.ResponseWriter, r *http.Request) {
 				req.Header[k] = v
 			}
 		}
+
+		utility.LogHttpRequest(req)
 	}
 
 	// Modify response (optional)
 	proxy.ModifyResponse = func(resp *http.Response) error {
 		// Remove security headers from upstream if needed
 		resp.Header.Del("Server")
+
+		// Print the body of the response for debugging
+		utility.LogHttpResponse(resp)
+
 		span.SetAttributes(attribute.Int("http.status_code", resp.StatusCode))
 		if resp.StatusCode >= 400 {
 			span.SetStatus(codes.Error, "Upstream returned error")

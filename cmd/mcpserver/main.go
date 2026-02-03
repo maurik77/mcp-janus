@@ -21,7 +21,7 @@ type GetInfoParams struct {
 }
 
 type GetWeatherParams struct {
-	City string `json:"city" jsonschema:"City to get weather for (nyc, sf, or boston)"`
+	City string `json:"city" jsonschema:"City to get weather for (e.g. nyc, sf, boston, or all other cities)"`
 	Date string `json:"date" jsonschema:"Date to get weather for (YYYY-MM-DD)"`
 }
 
@@ -42,20 +42,20 @@ type WeatherResult struct {
 func runServer(url string) {
 	// Create an MCP server.
 	server := mcp.NewServer(&mcp.Implementation{
-		Name:    "time-server",
+		Name:    "weather-server",
 		Version: "1.0.0",
 	}, nil)
 
-	// Add the cityTime tool.
+	// Add the cityWeather tool.
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "cityWeather",
 		Description: "Get weather information for a specific city and date",
 	}, getWeather)
 
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "knowYourInfo",
-		Description: "Get information about the user like UPN, email, roles, etc.",
-	}, getUserInfo)
+	// mcp.AddTool(server, &mcp.Tool{
+	// 	Name:        "knowYourInfo",
+	// 	Description: "Get information about the user like UPN, email, roles, etc.",
+	// }, getUserInfo)
 
 	// Create the streamable HTTP handler.
 	handler := mcp.NewStreamableHTTPHandler(func(req *http.Request) *mcp.Server {

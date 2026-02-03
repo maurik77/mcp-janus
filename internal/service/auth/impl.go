@@ -84,6 +84,9 @@ func (s *ProxyAuthHandler) RegisterClient(req *RegisterRequest) (*RegisterRespon
 		ClientSecret: secret,
 	}
 
+	// log response for demo purposes
+	utility.Logger.Info().Interface("client", res).Msg("Registered client")
+
 	return &res, nil
 }
 
@@ -132,6 +135,8 @@ func (s *ProxyAuthHandler) AuthenticateRequest(req *AuthenticateRequest) (string
 
 	span.SetStatus(codes.Ok, "Authentication request successful")
 
+	utility.Logger.Info().Str("auth_url", authURL).Msg("Authentication request successful")
+
 	return authURL, nil
 }
 
@@ -151,10 +156,14 @@ func (s *ProxyAuthHandler) ManageAuthorizationCode(req *AuthorizationCodeData) (
 		return nil, nil, fmt.Errorf("invalid_request")
 	}
 
-	return &AuthorizationCodeData{
+	res := &AuthorizationCodeData{
 		State: stateData.OriginalState,
 		Code:  req.Code,
-	}, redirectURL, nil
+	}
+
+	utility.Logger.Info().Interface("auth_code_data", res).Msg("Authorization code data")
+
+	return res, redirectURL, nil
 }
 
 func (s *ProxyAuthHandler) RetrieveAccessToken(req *AccessTokenRequest) (*oauth2.Token, error) {
@@ -166,26 +175,30 @@ func (s *ProxyAuthHandler) RetrieveAccessToken(req *AccessTokenRequest) (*oauth2
 		return nil, fmt.Errorf("invalid_request")
 	}
 
-	if req.Code == "" || req.ClientID == "" {
+	if req.Code == "" {
 		span.SetStatus(codes.Error, "Missing required parameters")
 		return nil, fmt.Errorf("invalid_request")
 	}
 
-	span.SetAttributes(
-		attribute.String("client.id", req.ClientID),
-	)
+	if req.ClientID != "" {
+		span.SetAttributes(
+			attribute.String("client.id", req.ClientID),
+		)
 
-	clientData, err := DecodeClientID(req.ClientID, s.encryption)
+		clientData, err := DecodeClientID(req.ClientID, s.encryption)
 
-	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, "Failed to decode client ID")
-		return nil, err
-	}
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "Failed to decode client ID")
 
-	if clientData.Secret != req.ClientSecret {
-		span.SetStatus(codes.Error, "Invalid client secret")
-		return nil, fmt.Errorf("invalid_request")
+			return nil, err
+		}
+
+		if clientData.Secret != req.ClientSecret {
+			span.SetStatus(codes.Error, "Invalid client secret")
+
+			return nil, fmt.Errorf("invalid_request")
+		}
 	}
 
 	// Exchange with real IdP
@@ -222,6 +235,9 @@ func (s *ProxyAuthHandler) RetrieveAccessToken(req *AccessTokenRequest) (*oauth2
 	}
 
 	span.SetStatus(codes.Ok, "Token exchange successful")
+
+	utility.Logger.Info().Str("access_token", opaqueToken.AccessToken).Msg("Access token received")
+
 	return opaqueToken, err
 }
 
