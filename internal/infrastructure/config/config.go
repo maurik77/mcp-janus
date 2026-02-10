@@ -30,6 +30,8 @@ type Proxy struct {
 	TLS         bool   `mapstructure:"tls"`
 	TLSCertFile string `mapstructure:"tls_cert_file"`
 	TLSKeyFile  string `mapstructure:"tls_key_file"`
+	LogLevel    string `mapstructure:"log_level"`
+	LogFormat   string `mapstructure:"log_format"`
 }
 
 type Telemetry struct {
@@ -108,6 +110,9 @@ func Load() (*Config, error) {
 	viper.SetDefault("telemetry.service_name", "mcp-proxy")
 	viper.SetDefault("telemetry.service_version", "1.0.0")
 	viper.SetDefault("telemetry.enabled", true)
+
+	viper.SetDefault("proxy.log_level", "error")
+	viper.SetDefault("proxy.log_format", "json")
 
 	var cfg Config
 	if err := viper.Unmarshal(&cfg); err != nil {

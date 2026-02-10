@@ -147,6 +147,18 @@ export MCP_PROXY_BASE_URL="https://proxy.example.com"
 export MCP_IDP_CLIENT_SECRET="your-secret-here"
 ```
 
+### Logging
+
+Logging is configurable via `proxy.log_level` and `proxy.log_format` in the config file.
+
+```yaml
+proxy:
+  log_level: info   # trace|debug|info|warn|error|fatal|panic
+  log_format: json  # json (text format may be added later)
+```
+
+Use `debug` or `trace` only in development, since request/response headers and bodies can be logged.
+
 ### Running
 
 ```bash
