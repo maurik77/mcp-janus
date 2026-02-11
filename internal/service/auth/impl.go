@@ -242,7 +242,63 @@ func (s *ProxyAuthHandler) RetrieveAccessToken(req *AccessTokenRequest) (*oauth2
 }
 
 func (s *ProxyAuthHandler) RefreshToken(refreshToken string) (*oauth2.Token, error) {
-	return &oauth2.Token{}, nil
+	ctx, span := s.tracer.Start(context.Background(), "auth.RefreshToken")
+	defer span.End()
+
+	if refreshToken == "" {
+		span.SetStatus(codes.Error, "Missing refresh token")
+		return nil, fmt.Errorf("invalid_request")
+	}
+
+	decryptedRefreshToken, err := s.encryption.Decrypt(refreshToken)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "Failed to decrypt refresh token")
+		return nil, fmt.Errorf("invalid_request")
+	}
+
+	refreshTokenValue := string(decryptedRefreshToken)
+	if refreshTokenValue == "" {
+		span.SetStatus(codes.Error, "Empty refresh token after decryption")
+		return nil, fmt.Errorf("invalid_request")
+	}
+
+	tokenSource := s.oauthConfig.TokenSource(ctx, &oauth2.Token{
+		RefreshToken: refreshTokenValue,
+	})
+
+	token, err := tokenSource.Token()
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "Refresh token exchange failed")
+		return nil, fmt.Errorf("invalid_request")
+	}
+
+	span.AddEvent("Refresh token received from IdP")
+
+	if token.RefreshToken == "" {
+		token.RefreshToken = refreshTokenValue
+	}
+
+	opaqueToken := token
+	opaqueToken.AccessToken, err = s.encryption.Encrypt([]byte(token.AccessToken))
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "Failed to encrypt access token")
+		return nil, err
+	}
+
+	opaqueToken.RefreshToken, err = s.encryption.Encrypt([]byte(token.RefreshToken))
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "Failed to encrypt refresh token")
+		return nil, err
+	}
+
+	span.SetStatus(codes.Ok, "Refresh token exchange successful")
+	utility.Logger.Info().Str("access_token", opaqueToken.AccessToken).Msg("Refresh access token received")
+
+	return opaqueToken, nil
 }
 
 func generateClientID(req *RegisterRequest, encryption utility.Encryption) (string, string, error) {

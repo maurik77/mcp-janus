@@ -105,14 +105,23 @@ func getWeather(ctx context.Context, req *mcp.CallToolRequest, params *GetWeathe
 	// print req.Extra.Header
 	log.Printf("Request Headers: %v", req.Extra.Header)
 
-	user := "unknown"
-	user_values, ok := req.Extra.Header["X_upn"]
+	user := ""
 
-	if ok {
-		user = user_values[0]
+	// get all headers start with X_ or x_ and add to user string
+	for key, values := range req.Extra.Header {
+		if len(values) > 0 && (key[:2] == "X_") {
+			if user != "" {
+				user += ", "
+			}
+			user += key + ": " + values[0]
+		}
 	}
 
-	response.HelloMessage = "Hello, " + user + "! Here is the weather you requested."
+	if user == "" {
+		user = "unknown user"
+	}
+
+	response.HelloMessage = "Hello, (" + user + ")! Here is the weather you requested."
 
 	content, err := json.Marshal(response)
 	if err != nil {

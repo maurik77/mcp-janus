@@ -44,7 +44,7 @@ Implementare un proxy sicuro che:
 - **Registrazione Dinamica Client**: Registrazione client conforme a RFC 7591
 - **Metadata delle Risorse Protette**: Conformità RFC 9728 per il discovery delle risorse
 - **Scambio Token**: Scambio sicuro di token con IdP upstream
-- **Supporto Refresh Token**: Endpoint di refresh token implementato
+- **Supporto Refresh Token**: Scambio refresh token implementato (handler HTTP da collegare)
 
 ### Architettura
 
@@ -298,7 +298,7 @@ Content-Type: application/x-www-form-urlencoded
 grant_type=refresh_token&refresh_token=<encrypted_refresh_token>&client_id=<encrypted_id>&client_secret=<secret>
 ```
 
-**Nota: Attualmente restituisce 501 Not Implemented.** L'endpoint esiste ed è instradato, ma la logica del refresh token non è ancora implementata. Il metodo `RefreshToken` nel servizio auth restituisce un token vuoto.
+**Nota: Attualmente restituisce 501 Not Implemented.** L'endpoint esiste ed è instradato, ma l'handler HTTP non è ancora collegato al flusso di refresh. Il metodo `RefreshToken` nel servizio auth è implementato, ma l'endpoint deve ancora invocarlo.
 
 ### Proxy MCP
 
@@ -576,6 +576,6 @@ Per problemi e domande:
 - [x] Integrazione OpenTelemetry (tracing distribuito e metriche)
 - [x] Stack di osservabilità (Jaeger, Prometheus, Grafana, OpenTelemetry Collector)
 - [x] Endpoint refresh token (restituisce 501 Not Implemented)
-- [ ] Implementazione refresh token (logica del servizio)
+- [x] Implementazione refresh token (logica del servizio)
 - [ ] Rate limiting
 - [ ] Specifica OpenAPI

@@ -44,7 +44,7 @@ Implement a secure proxy that:
 - **Dynamic Client Registration**: RFC 7591 compliant client registration
 - **Protected Resource Metadata**: RFC 9728 compliance for resource discovery
 - **Token Exchange**: Secure token exchange with upstream IdP
-- **Refresh Token Support**: Token refresh endpoint implemented
+- **Refresh Token Support**: Refresh token exchange implemented (HTTP handler wiring pending)
 
 ### Architecture
 
@@ -340,7 +340,7 @@ Content-Type: application/x-www-form-urlencoded
 grant_type=refresh_token&refresh_token=<encrypted_refresh_token>&client_id=<encrypted_id>&client_secret=<secret>
 ```
 
-**Note: Currently returns 501 Not Implemented.** The endpoint exists and is routed, but the refresh token logic is not yet implemented. The `RefreshToken` method in the auth service returns an empty token.
+**Note: Currently returns 501 Not Implemented.** The endpoint exists and is routed, but the HTTP handler is not wired to the auth refresh flow yet. The `RefreshToken` method in the auth service is implemented, but the endpoint still needs to call it.
 
 ### MCP Proxy
 
@@ -618,6 +618,6 @@ For issues and questions:
 - [x] OpenTelemetry integration (distributed tracing and metrics)
 - [x] Observability stack (Jaeger, Prometheus, Grafana, OpenTelemetry Collector)
 - [x] Refresh token endpoint (returns 501 Not Implemented)
-- [ ] Refresh token implementation (service logic)
+- [x] Refresh token implementation (service logic)
 - [ ] Rate limiting
 - [ ] OpenAPI specification
