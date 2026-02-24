@@ -168,10 +168,37 @@ func tokenHandler(authHandler auth.Service) gin.HandlerFunc {
 	}
 }
 
-// refreshHandler
-func refreshHandler(_ auth.Service) gin.HandlerFunc {
+// refreshHandler: client → Proxy
+func refreshHandler(authHandler auth.Service) gin.HandlerFunc {
+	type refreshRequest struct {
+		RefreshToken string `json:"refresh_token" form:"refresh_token"`
+	}
+
 	return func(c *gin.Context) {
-		c.JSON(http.StatusNotImplemented, gin.H{"error": "not_implemented"})
+		metrics := c.Request.Context().Value(metricsKey).(*telemetry.Metrics)
+		req := &refreshRequest{}
+		if err := c.Bind(req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request"})
+			return
+		}
+
+		if req.RefreshToken == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request", "error_description": "refresh_token is required"})
+			return
+		}
+
+		start := time.Now()
+		opaqueToken, err := authHandler.RefreshToken(req.RefreshToken)
+		duration := time.Since(start)
+
+		if err != nil {
+			metrics.RecordTokenExchange(c.Request.Context(), duration, false)
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_grant"})
+			return
+		}
+
+		metrics.RecordTokenExchange(c.Request.Context(), duration, true)
+		c.JSON(http.StatusOK, opaqueToken)
 	}
 }
 

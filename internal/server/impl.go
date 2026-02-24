@@ -90,7 +90,8 @@ func (p *proxy) AuthMiddleware() func(http.Handler) http.Handler {
 			claims, ok := jwtToken.Claims.(jwt.MapClaims)
 			if !ok {
 				span.SetStatus(codes.Error, "Failed to parse claims")
-				panic("cannot parse claims")
+				http.Error(w, `{"error":"invalid_token"}`, http.StatusUnauthorized)
+				return
 			}
 
 			// Add subject to span attributes
@@ -102,7 +103,9 @@ func (p *proxy) AuthMiddleware() func(http.Handler) http.Handler {
 
 			for source, dest := range p.cfg.IDP.ClaimsMapping {
 				if value, exists := claims[source]; exists {
-					r.Header.Add(dest, value.(string))
+					if strValue, ok := value.(string); ok {
+						r.Header.Add(dest, strValue)
+					}
 				}
 			}
 

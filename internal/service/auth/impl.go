@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/hex"
 	"fmt"
 	"mcpproxy/internal/infrastructure/config"
@@ -19,7 +20,6 @@ import (
 
 type ProxyAuthHandler struct {
 	config              config.Config
-	encKey              [32]byte
 	oauthConfig         *oauth2.Config
 	encryption          utility.Encryption
 	openidConfiguration *OpenIDConfiguration
@@ -51,7 +51,6 @@ func New(cfg config.Config, encryption utility.Encryption) (Service, error) {
 
 	return &ProxyAuthHandler{
 		config:              cfg,
-		encKey:              cfg.EncryptionKey(),
 		oauthConfig:         oauthConfig,
 		encryption:          encryption,
 		openidConfiguration: openidConfiguration,
@@ -123,11 +122,19 @@ func (s *ProxyAuthHandler) AuthenticateRequest(req *AuthenticateRequest) (string
 	stateData := StateData{
 		OriginalState: req.State,
 		RedirectURI:   req.RedirectURI,
+		ClientID:      req.ClientID,
+	}
+
+	encryptedState, err := stateData.Encode(s.encryption)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "Failed to encrypt state")
+		return "", fmt.Errorf("invalid_request")
 	}
 
 	// Redirect to real IdP
 	authURL := s.oauthConfig.AuthCodeURL(
-		stateData.Encode(),
+		encryptedState,
 		oauth2.SetAuthURLParam("code_challenge", req.CodeChallenge),
 		oauth2.SetAuthURLParam("code_challenge_method", req.CodeChallengeMethod),
 		oauth2.SetAuthURLParam("redirect_uri", s.config.Proxy.BaseURL+"/callback"),
@@ -144,15 +151,29 @@ func (s *ProxyAuthHandler) ManageAuthorizationCode(req *AuthorizationCodeData) (
 	if req == nil {
 		return nil, nil, fmt.Errorf("invalid_request")
 	}
-	// Decode state
-	stateData, err := DecodeStateData(req.State)
+	// Decrypt and decode state
+	stateData, err := DecodeStateData(req.State, s.encryption)
 	if err != nil {
 		return nil, nil, fmt.Errorf("invalid_request")
 	}
 
-	// Redirect back to client with original state and code
+	// Validate redirect URI against registered client
+	clientData, err := DecodeClientID(stateData.ClientID, s.encryption)
+	if err != nil {
+		return nil, nil, fmt.Errorf("invalid_request")
+	}
+
+	if !slices.Contains(clientData.RedirectURIs, stateData.RedirectURI) {
+		return nil, nil, fmt.Errorf("invalid_request")
+	}
+
+	// Validate redirect URI is a well-formed absolute URL with http(s) scheme
 	redirectURL, err := url.Parse(stateData.RedirectURI)
 	if err != nil {
+		return nil, nil, fmt.Errorf("invalid_request")
+	}
+
+	if redirectURL.Host == "" || (redirectURL.Scheme != "http" && redirectURL.Scheme != "https") {
 		return nil, nil, fmt.Errorf("invalid_request")
 	}
 
@@ -302,11 +323,9 @@ func (s *ProxyAuthHandler) RefreshToken(refreshToken string) (*oauth2.Token, err
 }
 
 func generateClientID(req *RegisterRequest, encryption utility.Encryption) (string, string, error) {
-	// For simplicity, we only store redirect_uris in encrypted client_id
-	// Generate a random secret (in real case, should be more robust)
-	secretBytes := make([]byte, 16)
-	for i := range secretBytes {
-		secretBytes[i] = byte(65 + i) // Simple deterministic for example
+	secretBytes := make([]byte, 32)
+	if _, err := rand.Read(secretBytes); err != nil {
+		return "", "", fmt.Errorf("failed to generate client secret: %w", err)
 	}
 	clientSecret := hex.EncodeToString(secretBytes)
 

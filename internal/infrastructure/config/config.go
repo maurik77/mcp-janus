@@ -3,6 +3,7 @@ package config
 
 import (
 	"encoding/hex"
+	"fmt"
 	"time"
 
 	"github.com/spf13/viper"
@@ -51,16 +52,24 @@ type Config struct {
 	Telemetry Telemetry `mapstructure:"telemetry"`
 }
 
-func (c *Config) EncryptionKey() [32]byte {
+func (c *Config) EncryptionKey() ([32]byte, error) {
 	var encKey [32]byte
 
 	if c == nil || c.Encryption.MasterKey == "" {
-		return encKey
+		return encKey, fmt.Errorf("encryption master_key is not configured")
 	}
 
-	keyBytes, _ := hex.DecodeString(c.Encryption.MasterKey)
+	keyBytes, err := hex.DecodeString(c.Encryption.MasterKey)
+	if err != nil {
+		return encKey, fmt.Errorf("encryption master_key is not valid hex: %w", err)
+	}
+
+	if len(keyBytes) != 32 {
+		return encKey, fmt.Errorf("encryption master_key must be exactly 32 bytes (64 hex chars), got %d bytes", len(keyBytes))
+	}
+
 	copy(encKey[:], keyBytes)
-	return encKey
+	return encKey, nil
 }
 
 func Load() (*Config, error) {
