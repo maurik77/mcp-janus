@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"mcpproxy/internal/infrastructure/config"
 	"mcpproxy/internal/service/auth"
 	"mcpproxy/internal/service/metadata"
@@ -24,25 +25,37 @@ type proxy struct {
 	auth       auth.Service
 	encryption utility.Encryption
 	tracer     trace.Tracer
+	targetURL  *url.URL
 }
 
 type key int
 
 const (
 	keyRealToken key = iota
-	keyUpstream
 )
 
 func NewProxy(cfg config.Config,
 	metadata metadata.Service,
 	auth auth.Service,
 	encryption utility.Encryption) (Proxy, error) {
+	targetURL, err := url.Parse(cfg.Upstream.BaseURL)
+	if err != nil {
+		return nil, fmt.Errorf("invalid upstream base_url %q: %w", cfg.Upstream.BaseURL, err)
+	}
+	if targetURL.Scheme == "" || targetURL.Host == "" {
+		return nil, fmt.Errorf("upstream base_url %q must be an absolute URL with scheme and host", cfg.Upstream.BaseURL)
+	}
+	if cfg.Upstream.PathPrefix != "" {
+		targetURL.Path = cfg.Upstream.PathPrefix
+	}
+
 	return &proxy{
 		cfg:        cfg,
 		metadata:   metadata,
 		auth:       auth,
 		encryption: encryption,
 		tracer:     otel.Tracer("mcp-proxy.server"),
+		targetURL:  targetURL,
 	}, nil
 }
 
@@ -74,7 +87,7 @@ func (p *proxy) AuthMiddleware() func(http.Handler) http.Handler {
 
 			span.AddEvent("Token decrypted")
 
-			jwtToken, err := p.auth.ValidateJWT(string(data))
+			jwtToken, err := p.auth.ValidateJWT(ctx, string(data))
 			if err != nil || !jwtToken.Valid {
 				if err != nil {
 					span.RecordError(err)
@@ -109,7 +122,6 @@ func (p *proxy) AuthMiddleware() func(http.Handler) http.Handler {
 				}
 			}
 
-			ctx = context.WithValue(ctx, keyUpstream, p.cfg.Upstream)
 			span.SetStatus(codes.Ok, "Authentication successful")
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
@@ -118,39 +130,26 @@ func (p *proxy) AuthMiddleware() func(http.Handler) http.Handler {
 
 // ProxyHandler forwards request to correct upstream
 func (p *proxy) ProxyHandler(w http.ResponseWriter, r *http.Request) {
-	ctx, span := p.tracer.Start(r.Context(), "proxy.ProxyHandler")
+	_, span := p.tracer.Start(r.Context(), "proxy.ProxyHandler")
 	defer span.End()
 
-	upstream := r.Context().Value(keyUpstream).(config.Upstream)
 	realToken := r.Context().Value(keyRealToken).(string)
 
 	span.SetAttributes(
 		attribute.String("http.method", r.Method),
 		attribute.String("http.path", r.URL.Path),
-		attribute.String("upstream.name", upstream.Name),
-		attribute.String("upstream.base_url", upstream.BaseURL),
+		attribute.String("upstream.name", p.cfg.Upstream.Name),
+		attribute.String("upstream.target_url", p.targetURL.String()),
 	)
-
-	// Build target URL
-	targetURL, _ := url.Parse(upstream.BaseURL)
-
-	if upstream.PathPrefix != "" {
-		targetURL.Path = upstream.PathPrefix
-	}
-
-	span.SetAttributes(attribute.String("upstream.target_url", targetURL.String()))
 	span.AddEvent("Forwarding request to upstream")
 
-	// Create reverse proxy
-	proxy := httputil.NewSingleHostReverseProxy(targetURL)
+	reverseProxy := httputil.NewSingleHostReverseProxy(p.targetURL)
 
-	// Modify request
-	originalDirector := proxy.Director
-	proxy.Director = func(req *http.Request) {
+	originalDirector := reverseProxy.Director
+	reverseProxy.Director = func(req *http.Request) {
 		originalDirector(req)
-		req.Host = targetURL.Host
+		req.Host = p.targetURL.Host
 		req.Header.Set("Authorization", "Bearer "+realToken)
-		// Copy all headers except Host
 		for k, v := range r.Header {
 			if k != "Host" {
 				req.Header[k] = v
@@ -160,12 +159,9 @@ func (p *proxy) ProxyHandler(w http.ResponseWriter, r *http.Request) {
 		utility.LogHttpRequest(req)
 	}
 
-	// Modify response (optional)
-	proxy.ModifyResponse = func(resp *http.Response) error {
-		// Remove security headers from upstream if needed
+	reverseProxy.ModifyResponse = func(resp *http.Response) error {
 		resp.Header.Del("Server")
 
-		// Print the body of the response for debugging
 		utility.LogHttpResponse(resp)
 
 		span.SetAttributes(attribute.Int("http.status_code", resp.StatusCode))
@@ -177,10 +173,7 @@ func (p *proxy) ProxyHandler(w http.ResponseWriter, r *http.Request) {
 		return nil
 	}
 
-	// Suppress unused variable warning
-	_ = ctx
-
-	proxy.ServeHTTP(w, r)
+	reverseProxy.ServeHTTP(w, r)
 }
 
 // extractBearerToken extracts token from Authorization header

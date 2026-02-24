@@ -9,6 +9,7 @@ import (
 	"mcpproxy/internal/utility"
 	"net/url"
 	"slices"
+	"sync"
 
 	"github.com/golang-jwt/jwt/v5"
 	"go.opentelemetry.io/otel"
@@ -24,6 +25,7 @@ type ProxyAuthHandler struct {
 	encryption          utility.Encryption
 	openidConfiguration *OpenIDConfiguration
 	jwks                *JWKS
+	jwksMu              sync.RWMutex
 	tracer              trace.Tracer
 }
 
@@ -59,8 +61,8 @@ func New(cfg config.Config, encryption utility.Encryption) (Service, error) {
 	}, nil
 }
 
-func (s *ProxyAuthHandler) RegisterClient(req *RegisterRequest) (*RegisterResponse, error) {
-	_, span := s.tracer.Start(context.Background(), "auth.RegisterClient")
+func (s *ProxyAuthHandler) RegisterClient(ctx context.Context, req *RegisterRequest) (*RegisterResponse, error) {
+	_, span := s.tracer.Start(ctx, "auth.RegisterClient")
 	defer span.End()
 
 	if req != nil && len(req.RedirectURIs) > 0 {
@@ -89,8 +91,8 @@ func (s *ProxyAuthHandler) RegisterClient(req *RegisterRequest) (*RegisterRespon
 	return &res, nil
 }
 
-func (s *ProxyAuthHandler) AuthenticateRequest(req *AuthenticateRequest) (string, error) {
-	_, span := s.tracer.Start(context.Background(), "auth.AuthenticateRequest")
+func (s *ProxyAuthHandler) AuthenticateRequest(ctx context.Context, req *AuthenticateRequest) (string, error) {
+	_, span := s.tracer.Start(ctx, "auth.AuthenticateRequest")
 	defer span.End()
 
 	if req == nil || req.ClientID == "" {
@@ -147,7 +149,7 @@ func (s *ProxyAuthHandler) AuthenticateRequest(req *AuthenticateRequest) (string
 	return authURL, nil
 }
 
-func (s *ProxyAuthHandler) ManageAuthorizationCode(req *AuthorizationCodeData) (*AuthorizationCodeData, *url.URL, error) {
+func (s *ProxyAuthHandler) ManageAuthorizationCode(ctx context.Context, req *AuthorizationCodeData) (*AuthorizationCodeData, *url.URL, error) {
 	if req == nil {
 		return nil, nil, fmt.Errorf("invalid_request")
 	}
@@ -187,8 +189,8 @@ func (s *ProxyAuthHandler) ManageAuthorizationCode(req *AuthorizationCodeData) (
 	return res, redirectURL, nil
 }
 
-func (s *ProxyAuthHandler) RetrieveAccessToken(req *AccessTokenRequest) (*oauth2.Token, error) {
-	ctx, span := s.tracer.Start(context.Background(), "auth.RetrieveAccessToken")
+func (s *ProxyAuthHandler) RetrieveAccessToken(ctx context.Context, req *AccessTokenRequest) (*oauth2.Token, error) {
+	ctx, span := s.tracer.Start(ctx, "auth.RetrieveAccessToken")
 	defer span.End()
 
 	if req == nil {
@@ -262,8 +264,8 @@ func (s *ProxyAuthHandler) RetrieveAccessToken(req *AccessTokenRequest) (*oauth2
 	return opaqueToken, err
 }
 
-func (s *ProxyAuthHandler) RefreshToken(refreshToken string) (*oauth2.Token, error) {
-	ctx, span := s.tracer.Start(context.Background(), "auth.RefreshToken")
+func (s *ProxyAuthHandler) RefreshToken(ctx context.Context, refreshToken string) (*oauth2.Token, error) {
+	ctx, span := s.tracer.Start(ctx, "auth.RefreshToken")
 	defer span.End()
 
 	if refreshToken == "" {
@@ -339,14 +341,35 @@ func generateClientID(req *RegisterRequest, encryption utility.Encryption) (stri
 	return encryptedClientID, clientSecret, err
 }
 
-func (s *ProxyAuthHandler) ValidateJWT(tokenString string) (*jwt.Token, error) {
+func (s *ProxyAuthHandler) ValidateJWT(ctx context.Context, tokenString string) (*jwt.Token, error) {
 	keyFunc := func(token *jwt.Token) (any, error) {
-		if kid, ok := token.Header["kid"].(string); ok {
-			if key := s.jwks.GetKeyByKID(kid); key != nil {
-				return key, nil
-			}
+		kid, ok := token.Header["kid"].(string)
+		if !ok {
+			return nil, fmt.Errorf("missing kid in token header")
 		}
-		return nil, fmt.Errorf("key not found")
+
+		// Try cached JWKS first
+		s.jwksMu.RLock()
+		key := s.jwks.GetKeyByKID(kid)
+		s.jwksMu.RUnlock()
+		if key != nil {
+			return key, nil
+		}
+
+		// Cache miss — IdP may have rotated keys; refresh JWKS
+		if err := s.refreshJWKS(); err != nil {
+			utility.Logger.Warn().Err(err).Str("kid", kid).Msg("Failed to refresh JWKS")
+			return nil, fmt.Errorf("key not found and JWKS refresh failed: %w", err)
+		}
+
+		s.jwksMu.RLock()
+		key = s.jwks.GetKeyByKID(kid)
+		s.jwksMu.RUnlock()
+		if key != nil {
+			return key, nil
+		}
+
+		return nil, fmt.Errorf("key %q not found after JWKS refresh", kid)
 	}
 
 	options := []jwt.ParserOption{}
@@ -361,4 +384,17 @@ func (s *ProxyAuthHandler) ValidateJWT(tokenString string) (*jwt.Token, error) {
 	}
 
 	return token, nil
+}
+
+// refreshJWKS re-fetches the JWKS from the IdP.
+func (s *ProxyAuthHandler) refreshJWKS() error {
+	jwks, err := fetchJWKS(s.openidConfiguration.JWKSEndpoint)
+	if err != nil {
+		return err
+	}
+	s.jwksMu.Lock()
+	s.jwks = jwks
+	s.jwksMu.Unlock()
+	utility.Logger.Info().Msg("JWKS refreshed successfully")
+	return nil
 }

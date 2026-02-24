@@ -111,10 +111,6 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := viper.ReadInConfig(); err != nil {
-		return nil, err
-	}
-
 	viper.SetDefault("telemetry.otlp_endpoint", "localhost:4317")
 	viper.SetDefault("telemetry.service_name", "mcp-proxy")
 	viper.SetDefault("telemetry.service_version", "1.0.0")
@@ -122,6 +118,10 @@ func Load() (*Config, error) {
 
 	viper.SetDefault("proxy.log_level", "error")
 	viper.SetDefault("proxy.log_format", "json")
+
+	if err := viper.ReadInConfig(); err != nil {
+		return nil, err
+	}
 
 	var cfg Config
 	if err := viper.Unmarshal(&cfg); err != nil {

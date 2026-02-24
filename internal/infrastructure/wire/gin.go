@@ -101,7 +101,7 @@ func authHandler(authService auth.Service) gin.HandlerFunc {
 
 		metrics.RecordAuthRequest(c.Request.Context(), req.ClientID)
 
-		authURL, err := authService.AuthenticateRequest(req)
+		authURL, err := authService.AuthenticateRequest(c.Request.Context(), req)
 
 		if err != nil {
 			metrics.RecordAuthFailure(c.Request.Context(), req.ClientID, "authentication_failed")
@@ -125,7 +125,7 @@ func callbackHandler(authService auth.Service) gin.HandlerFunc {
 			return
 		}
 
-		authData, redirectURL, err := authService.ManageAuthorizationCode(req)
+		authData, redirectURL, err := authService.ManageAuthorizationCode(c.Request.Context(), req)
 
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request"})
@@ -154,7 +154,7 @@ func tokenHandler(authHandler auth.Service) gin.HandlerFunc {
 		}
 
 		start := time.Now()
-		opaqueToken, err := authHandler.RetrieveAccessToken(req)
+		opaqueToken, err := authHandler.RetrieveAccessToken(c.Request.Context(), req)
 		duration := time.Since(start)
 
 		if err != nil {
@@ -188,7 +188,7 @@ func refreshHandler(authHandler auth.Service) gin.HandlerFunc {
 		}
 
 		start := time.Now()
-		opaqueToken, err := authHandler.RefreshToken(req.RefreshToken)
+		opaqueToken, err := authHandler.RefreshToken(c.Request.Context(), req.RefreshToken)
 		duration := time.Since(start)
 
 		if err != nil {
@@ -212,7 +212,7 @@ func registerHandler(authHandler auth.Service) gin.HandlerFunc {
 			return
 		}
 
-		res, err := authHandler.RegisterClient(req)
+		res, err := authHandler.RegisterClient(c.Request.Context(), req)
 
 		if err != nil {
 			metrics.RecordClientRegistration(c.Request.Context(), false)

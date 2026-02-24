@@ -58,6 +58,9 @@ func (e *encryption) Decrypt(enc string) ([]byte, error) {
 		return nil, err
 	}
 	nonceSize := e.gcm.NonceSize()
+	if len(data) < nonceSize {
+		return nil, fmt.Errorf("ciphertext too short")
+	}
 	nonce, cipherText := data[:nonceSize], data[nonceSize:]
 	return e.gcm.Open(nil, nonce, cipherText, nil)
 }
