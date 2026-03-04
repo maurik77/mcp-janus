@@ -73,7 +73,7 @@ func TestTokenHandler(t *testing.T) {
 			contentType:        "application/json",
 			mockToken:          nil,
 			mockError:          assert.AnError,
-			expectedStatusCode: http.StatusInternalServerError,
+			expectedStatusCode: http.StatusBadRequest,
 		},
 	}
 

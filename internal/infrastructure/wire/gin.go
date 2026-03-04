@@ -117,6 +117,15 @@ func authHandler(authService auth.Service) gin.HandlerFunc {
 // callbackHandler: IdP → Proxy
 func callbackHandler(authService auth.Service) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// RFC 6749 §4.1.2.1: propagate IdP errors back to the client redirect URI
+		if idpErr := c.Query("error"); idpErr != "" {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error":             idpErr,
+				"error_description": c.Query("error_description"),
+			})
+			return
+		}
+
 		req := &auth.AuthorizationCodeData{}
 		err := c.BindQuery(req)
 
@@ -159,7 +168,7 @@ func tokenHandler(authHandler auth.Service) gin.HandlerFunc {
 
 		if err != nil {
 			metrics.RecordTokenExchange(c.Request.Context(), duration, false)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "server_error"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_grant"})
 			return
 		}
 
@@ -221,7 +230,7 @@ func registerHandler(authHandler auth.Service) gin.HandlerFunc {
 		}
 
 		metrics.RecordClientRegistration(c.Request.Context(), true)
-		c.JSON(http.StatusOK, res)
+		c.JSON(http.StatusCreated, res)
 	}
 }
 

@@ -38,7 +38,7 @@ func TestRegisterHandler(t *testing.T) {
 				ClientSecret: "test_client_secret",
 			},
 			mockError:          nil,
-			expectedStatusCode: http.StatusOK,
+			expectedStatusCode: http.StatusCreated,
 			expectedResponse: &auth.RegisterResponse{
 				ClientID:     "test_client_id",
 				ClientSecret: "test_client_secret",

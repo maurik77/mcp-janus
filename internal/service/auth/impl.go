@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	"go.opentelemetry.io/otel"
@@ -29,15 +30,49 @@ type ProxyAuthHandler struct {
 	tracer              trace.Tracer
 }
 
+// withRetry calls fn up to attempts times, waiting delay between failures.
+func withRetry[T any](attempts int, delay time.Duration, fn func() (T, error)) (T, error) {
+	var err error
+	for i := range attempts {
+		var result T
+		result, err = fn()
+		if err == nil {
+			return result, nil
+		}
+		if i < attempts-1 {
+			utility.Logger.Warn().Err(err).
+				Int("attempt", i+1).
+				Int("max", attempts).
+				Msg("fetch failed, retrying")
+			time.Sleep(delay)
+		}
+	}
+	var zero T
+	return zero, err
+}
+
 func New(cfg config.Config, encryption utility.Encryption) (Service, error) {
-	openidConfiguration, err := fetchOpenIDConfiguration(cfg.IDP.OpenIDConfigurationURL)
-	if err != nil {
-		return nil, err
+	retryAttempts := cfg.IDP.FetchRetryAttempts
+	if retryAttempts <= 0 {
+		retryAttempts = 3
+	}
+	retryDelay := cfg.IDP.FetchRetryDelay
+	if retryDelay <= 0 {
+		retryDelay = 2 * time.Second
 	}
 
-	jwks, err := fetchJWKS(openidConfiguration.JWKSEndpoint)
+	openidConfiguration, err := withRetry(retryAttempts, retryDelay, func() (*OpenIDConfiguration, error) {
+		return fetchOpenIDConfiguration(cfg.IDP.OpenIDConfigurationURL)
+	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to fetch OpenID configuration after %d attempts: %w", retryAttempts, err)
+	}
+
+	jwks, err := withRetry(retryAttempts, retryDelay, func() (*JWKS, error) {
+		return fetchJWKS(openidConfiguration.JWKSEndpoint)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch JWKS after %d attempts: %w", retryAttempts, err)
 	}
 
 	oauthConfig := &oauth2.Config{

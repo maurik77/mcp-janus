@@ -23,6 +23,8 @@ type IDP struct {
 	Scopes                 []string          `mapstructure:"scopes"`
 	ClaimsMapping          map[string]string `mapstructure:"claims_mapping"`
 	JWTLeeway              time.Duration     `mapstructure:"jwt_leeway"`
+	FetchRetryAttempts     int               `mapstructure:"fetch_retry_attempts"`
+	FetchRetryDelay        time.Duration     `mapstructure:"fetch_retry_delay"`
 }
 
 type Proxy struct {
@@ -118,6 +120,9 @@ func Load() (*Config, error) {
 
 	viper.SetDefault("proxy.log_level", "error")
 	viper.SetDefault("proxy.log_format", "json")
+
+	viper.SetDefault("idp.fetch_retry_attempts", 3)
+	viper.SetDefault("idp.fetch_retry_delay", "2s")
 
 	if err := viper.ReadInConfig(); err != nil {
 		return nil, err

@@ -77,9 +77,9 @@ func (j *JWK) RSAKey() (*rsa.PublicKey, error) {
 }
 
 func (jwks *JWKS) GetKeyByID(kid string) (*JWK, error) {
-	for _, key := range jwks.Keys {
-		if key.Kid == kid {
-			return &key, nil
+	for i := range jwks.Keys {
+		if jwks.Keys[i].Kid == kid {
+			return &jwks.Keys[i], nil
 		}
 	}
 	return nil, fmt.Errorf("key not found")

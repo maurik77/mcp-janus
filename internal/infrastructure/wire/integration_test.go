@@ -301,7 +301,7 @@ func TestIntegration_RegisterAndAuth(t *testing.T) {
 	rec := httptest.NewRecorder()
 	engine.ServeHTTP(rec, req)
 
-	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, http.StatusCreated, rec.Code)
 
 	var regResp auth.RegisterResponse
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &regResp))
@@ -543,7 +543,7 @@ func TestIntegration_TokenExchangeFlow(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	engine.ServeHTTP(rec, req)
-	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, http.StatusCreated, rec.Code)
 
 	var regResp auth.RegisterResponse
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &regResp))

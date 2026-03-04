@@ -20,12 +20,13 @@ import (
 )
 
 type proxy struct {
-	cfg        config.Config
-	metadata   metadata.Service
-	auth       auth.Service
-	encryption utility.Encryption
-	tracer     trace.Tracer
-	targetURL  *url.URL
+	cfg          config.Config
+	metadata     metadata.Service
+	auth         auth.Service
+	encryption   utility.Encryption
+	tracer       trace.Tracer
+	targetURL    *url.URL
+	reverseProxy *httputil.ReverseProxy
 }
 
 type key int
@@ -49,13 +50,35 @@ func NewProxy(cfg config.Config,
 		targetURL.Path = cfg.Upstream.PathPrefix
 	}
 
+	rp := &httputil.ReverseProxy{}
+	rp.Rewrite = func(pr *httputil.ProxyRequest) {
+		pr.SetURL(targetURL)
+		if realToken, ok := pr.In.Context().Value(keyRealToken).(string); ok {
+			pr.Out.Header.Set("Authorization", "Bearer "+realToken)
+		}
+		utility.LogHttpRequest(pr.Out)
+	}
+	rp.ModifyResponse = func(resp *http.Response) error {
+		resp.Header.Del("Server")
+		utility.LogHttpResponse(resp)
+		span := trace.SpanFromContext(resp.Request.Context())
+		span.SetAttributes(attribute.Int("http.status_code", resp.StatusCode))
+		if resp.StatusCode >= 400 {
+			span.SetStatus(codes.Error, "Upstream returned error")
+		} else {
+			span.SetStatus(codes.Ok, "Request proxied successfully")
+		}
+		return nil
+	}
+
 	return &proxy{
-		cfg:        cfg,
-		metadata:   metadata,
-		auth:       auth,
-		encryption: encryption,
-		tracer:     otel.Tracer("mcp-proxy.server"),
-		targetURL:  targetURL,
+		cfg:          cfg,
+		metadata:     metadata,
+		auth:         auth,
+		encryption:   encryption,
+		tracer:       otel.Tracer("mcp-proxy.server"),
+		targetURL:    targetURL,
+		reverseProxy: rp,
 	}, nil
 }
 
@@ -133,8 +156,6 @@ func (p *proxy) ProxyHandler(w http.ResponseWriter, r *http.Request) {
 	_, span := p.tracer.Start(r.Context(), "proxy.ProxyHandler")
 	defer span.End()
 
-	realToken := r.Context().Value(keyRealToken).(string)
-
 	span.SetAttributes(
 		attribute.String("http.method", r.Method),
 		attribute.String("http.path", r.URL.Path),
@@ -143,37 +164,7 @@ func (p *proxy) ProxyHandler(w http.ResponseWriter, r *http.Request) {
 	)
 	span.AddEvent("Forwarding request to upstream")
 
-	reverseProxy := httputil.NewSingleHostReverseProxy(p.targetURL)
-
-	originalDirector := reverseProxy.Director
-	reverseProxy.Director = func(req *http.Request) {
-		originalDirector(req)
-		req.Host = p.targetURL.Host
-		req.Header.Set("Authorization", "Bearer "+realToken)
-		for k, v := range r.Header {
-			if k != "Host" {
-				req.Header[k] = v
-			}
-		}
-
-		utility.LogHttpRequest(req)
-	}
-
-	reverseProxy.ModifyResponse = func(resp *http.Response) error {
-		resp.Header.Del("Server")
-
-		utility.LogHttpResponse(resp)
-
-		span.SetAttributes(attribute.Int("http.status_code", resp.StatusCode))
-		if resp.StatusCode >= 400 {
-			span.SetStatus(codes.Error, "Upstream returned error")
-		} else {
-			span.SetStatus(codes.Ok, "Request proxied successfully")
-		}
-		return nil
-	}
-
-	reverseProxy.ServeHTTP(w, r)
+	p.reverseProxy.ServeHTTP(w, r)
 }
 
 // extractBearerToken extracts token from Authorization header
