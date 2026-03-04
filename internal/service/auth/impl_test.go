@@ -593,7 +593,8 @@ func TestRetrieveAccessToken(t *testing.T) {
 		})
 		require.NoError(t, err)
 		assert.Equal(t, "encrypted_idp-access-jwt", token.AccessToken)
-		assert.Equal(t, "encrypted_idp-refresh-token", token.RefreshToken)
+		// refresh token is now JSON-encoded RefreshTokenData
+		assert.Contains(t, token.RefreshToken, "idp-refresh-token")
 		assert.Equal(t, "Bearer", token.TokenType)
 	})
 
@@ -619,7 +620,7 @@ func TestRetrieveAccessToken(t *testing.T) {
 		})
 		require.NoError(t, err)
 		assert.Equal(t, "encrypted_idp-jwt", token.AccessToken)
-		assert.Equal(t, "encrypted_idp-refresh", token.RefreshToken)
+		assert.Contains(t, token.RefreshToken, "idp-refresh")
 	})
 
 	t.Run("access token encryption failure", func(t *testing.T) {
@@ -681,6 +682,198 @@ func TestRetrieveAccessToken(t *testing.T) {
 		})
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "refresh encrypt failed")
+	})
+}
+
+// --- TestRegisterClient delegate mode ---
+
+func TestRegisterClient_Delegate(t *testing.T) {
+	t.Run("delegate mode success", func(t *testing.T) {
+		dcrServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
+			assert.Equal(t, "Bearer init-token", r.Header.Get("Authorization"))
+			w.WriteHeader(http.StatusCreated)
+			json.NewEncoder(w).Encode(map[string]any{
+				"client_id":     "kc-client-id",
+				"client_secret": "kc-client-secret",
+				"redirect_uris": []string{"http://localhost/callback"},
+			})
+		}))
+		defer dcrServer.Close()
+
+		handler := &ProxyAuthHandler{
+			config: config.Config{
+				IDP: config.IDP{
+					RegistrationMode:         "delegate",
+					RegistrationInitialToken: "init-token",
+				},
+			},
+			openidConfiguration: &OpenIDConfiguration{
+				RegistrationEndpoint: dcrServer.URL,
+			},
+			encryption: &mockEncryption{},
+			tracer:     otel.Tracer("test"),
+		}
+
+		resp, err := handler.RegisterClient(context.Background(), &RegisterRequest{
+			ClientName:   "Test",
+			RedirectURIs: []string{"http://localhost/callback"},
+		})
+		require.NoError(t, err)
+		assert.NotEmpty(t, resp.ClientID)
+		assert.Equal(t, "kc-client-secret", resp.ClientSecret)
+
+		// Verify the client_id blob contains Keycloak credentials
+		decoded, err := DecodeClientID(resp.ClientID, handler.encryption)
+		require.NoError(t, err)
+		assert.Equal(t, "kc-client-id", decoded.IDPClientID)
+		assert.Equal(t, "kc-client-secret", decoded.IDPClientSecret)
+	})
+
+	t.Run("delegate mode DCR server error", func(t *testing.T) {
+		dcrServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusUnauthorized)
+		}))
+		defer dcrServer.Close()
+
+		handler := &ProxyAuthHandler{
+			config: config.Config{
+				IDP: config.IDP{RegistrationMode: "delegate"},
+			},
+			openidConfiguration: &OpenIDConfiguration{
+				RegistrationEndpoint: dcrServer.URL,
+			},
+			encryption: &mockEncryption{},
+			tracer:     otel.Tracer("test"),
+		}
+
+		_, err := handler.RegisterClient(context.Background(), &RegisterRequest{
+			RedirectURIs: []string{"http://localhost/callback"},
+		})
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "401")
+	})
+}
+
+// --- TestValidateJWT audience/issuer ---
+
+func TestValidateJWT_AudienceIssuer(t *testing.T) {
+	key := testRSAKey(t)
+	kid := "test-kid"
+	jwksWithKey := &JWKS{Keys: []JWK{rsaPublicKeyToJWK(&key.PublicKey, kid)}}
+
+	now := time.Now()
+
+	t.Run("valid audience passes", func(t *testing.T) {
+		handler := &ProxyAuthHandler{
+			config: config.Config{IDP: config.IDP{
+				ValidateAudience: true,
+				Audience:         "http://localhost:8081",
+			}},
+			jwks: jwksWithKey,
+			openidConfiguration: &OpenIDConfiguration{
+				Issuer: "https://example.com",
+			},
+			tracer: otel.Tracer("test"),
+		}
+
+		claims := jwt.MapClaims{
+			"sub": "user",
+			"exp": float64(now.Add(time.Hour).Unix()),
+			"aud": "http://localhost:8081",
+		}
+		tokenStr := signTestJWT(t, key, kid, claims)
+		token, err := handler.ValidateJWT(context.Background(), tokenStr)
+		require.NoError(t, err)
+		assert.True(t, token.Valid)
+	})
+
+	t.Run("wrong audience fails", func(t *testing.T) {
+		handler := &ProxyAuthHandler{
+			config: config.Config{IDP: config.IDP{
+				ValidateAudience: true,
+				Audience:         "http://localhost:8081",
+			}},
+			jwks: jwksWithKey,
+			openidConfiguration: &OpenIDConfiguration{},
+			tracer:              otel.Tracer("test"),
+		}
+
+		claims := jwt.MapClaims{
+			"sub": "user",
+			"exp": float64(now.Add(time.Hour).Unix()),
+			"aud": "http://other-service",
+		}
+		tokenStr := signTestJWT(t, key, kid, claims)
+		_, err := handler.ValidateJWT(context.Background(), tokenStr)
+		assert.Error(t, err)
+	})
+
+	t.Run("valid issuer passes", func(t *testing.T) {
+		handler := &ProxyAuthHandler{
+			config: config.Config{IDP: config.IDP{
+				ValidateIssuer: true,
+			}},
+			jwks: jwksWithKey,
+			openidConfiguration: &OpenIDConfiguration{
+				Issuer: "https://example.com",
+			},
+			tracer: otel.Tracer("test"),
+		}
+
+		claims := jwt.MapClaims{
+			"sub": "user",
+			"exp": float64(now.Add(time.Hour).Unix()),
+			"iss": "https://example.com",
+		}
+		tokenStr := signTestJWT(t, key, kid, claims)
+		token, err := handler.ValidateJWT(context.Background(), tokenStr)
+		require.NoError(t, err)
+		assert.True(t, token.Valid)
+	})
+
+	t.Run("wrong issuer fails", func(t *testing.T) {
+		handler := &ProxyAuthHandler{
+			config: config.Config{IDP: config.IDP{
+				ValidateIssuer: true,
+			}},
+			jwks: jwksWithKey,
+			openidConfiguration: &OpenIDConfiguration{
+				Issuer: "https://example.com",
+			},
+			tracer: otel.Tracer("test"),
+		}
+
+		claims := jwt.MapClaims{
+			"sub": "user",
+			"exp": float64(now.Add(time.Hour).Unix()),
+			"iss": "https://evil.com",
+		}
+		tokenStr := signTestJWT(t, key, kid, claims)
+		_, err := handler.ValidateJWT(context.Background(), tokenStr)
+		assert.Error(t, err)
+	})
+
+	t.Run("audience validation disabled ignores wrong aud", func(t *testing.T) {
+		handler := &ProxyAuthHandler{
+			config: config.Config{IDP: config.IDP{
+				ValidateAudience: false,
+				Audience:         "http://localhost:8081",
+			}},
+			jwks: jwksWithKey,
+			openidConfiguration: &OpenIDConfiguration{},
+			tracer:              otel.Tracer("test"),
+		}
+
+		claims := jwt.MapClaims{
+			"sub": "user",
+			"exp": float64(now.Add(time.Hour).Unix()),
+			"aud": "http://completely-different",
+		}
+		tokenStr := signTestJWT(t, key, kid, claims)
+		token, err := handler.ValidateJWT(context.Background(), tokenStr)
+		require.NoError(t, err)
+		assert.True(t, token.Valid)
 	})
 }
 
@@ -760,7 +953,8 @@ func TestRefreshToken(t *testing.T) {
 		token, err := handler.RefreshToken(context.Background(), "encrypted_real-refresh-token")
 		require.NoError(t, err)
 		assert.Equal(t, "encrypted_new-access-jwt", token.AccessToken)
-		assert.Equal(t, "encrypted_new-refresh-token", token.RefreshToken)
+		// refresh token is now JSON-encoded RefreshTokenData
+		assert.Contains(t, token.RefreshToken, "new-refresh-token")
 	})
 
 	t.Run("encryption failure after refresh", func(t *testing.T) {

@@ -104,12 +104,44 @@ func (s *ProxyAuthHandler) RegisterClient(ctx context.Context, req *RegisterRequ
 		span.SetAttributes(attribute.Int("redirect_uris.count", len(req.RedirectURIs)))
 	}
 
-	clientId, secret, err := generateClientID(req, s.encryption)
+	var (
+		clientId string
+		secret   string
+		err      error
+	)
 
-	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, "Failed to generate client ID")
-		return nil, err
+	if s.config.IDP.RegistrationMode == "delegate" {
+		dcrResp, dcrErr := registerWithKeycloakDCR(
+			s.openidConfiguration.RegistrationEndpoint,
+			s.config.IDP.RegistrationInitialToken,
+			req,
+		)
+		if dcrErr != nil {
+			span.RecordError(dcrErr)
+			span.SetStatus(codes.Error, "Keycloak DCR failed")
+			return nil, dcrErr
+		}
+
+		clientData := ClientIdData{
+			RedirectURIs:    req.RedirectURIs,
+			Secret:          dcrResp.ClientSecret,
+			IDPClientID:     dcrResp.ClientID,
+			IDPClientSecret: dcrResp.ClientSecret,
+		}
+		clientId, err = clientData.Encode(s.encryption)
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "Failed to encode client data")
+			return nil, err
+		}
+		secret = dcrResp.ClientSecret
+	} else {
+		clientId, secret, err = generateClientID(req, s.encryption)
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "Failed to generate client ID")
+			return nil, err
+		}
 	}
 
 	span.SetAttributes(attribute.String("client.id", clientId))
@@ -124,6 +156,21 @@ func (s *ProxyAuthHandler) RegisterClient(ctx context.Context, req *RegisterRequ
 	utility.Logger.Info().Interface("client", res).Msg("Registered client")
 
 	return &res, nil
+}
+
+// oauthConfigForClient returns a per-client oauth2.Config when the client has
+// IDP credentials (delegate mode), otherwise returns the shared config.
+func (s *ProxyAuthHandler) oauthConfigForClient(cd *ClientIdData) *oauth2.Config {
+	if cd != nil && cd.IDPClientID != "" {
+		return &oauth2.Config{
+			ClientID:     cd.IDPClientID,
+			ClientSecret: cd.IDPClientSecret,
+			RedirectURL:  s.oauthConfig.RedirectURL,
+			Endpoint:     s.oauthConfig.Endpoint,
+			Scopes:       s.oauthConfig.Scopes,
+		}
+	}
+	return s.oauthConfig
 }
 
 func (s *ProxyAuthHandler) AuthenticateRequest(ctx context.Context, req *AuthenticateRequest) (string, error) {
@@ -170,7 +217,7 @@ func (s *ProxyAuthHandler) AuthenticateRequest(ctx context.Context, req *Authent
 	}
 
 	// Redirect to real IdP
-	authURL := s.oauthConfig.AuthCodeURL(
+	authURL := s.oauthConfigForClient(clientData).AuthCodeURL(
 		encryptedState,
 		oauth2.SetAuthURLParam("code_challenge", req.CodeChallenge),
 		oauth2.SetAuthURLParam("code_challenge_method", req.CodeChallengeMethod),
@@ -238,29 +285,28 @@ func (s *ProxyAuthHandler) RetrieveAccessToken(ctx context.Context, req *AccessT
 		return nil, fmt.Errorf("invalid_request")
 	}
 
+	var clientData *ClientIdData
 	if req.ClientID != "" {
 		span.SetAttributes(
 			attribute.String("client.id", req.ClientID),
 		)
 
-		clientData, err := DecodeClientID(req.ClientID, s.encryption)
-
+		var err error
+		clientData, err = DecodeClientID(req.ClientID, s.encryption)
 		if err != nil {
 			span.RecordError(err)
 			span.SetStatus(codes.Error, "Failed to decode client ID")
-
 			return nil, err
 		}
 
 		if clientData.Secret != req.ClientSecret {
 			span.SetStatus(codes.Error, "Invalid client secret")
-
 			return nil, fmt.Errorf("invalid_request")
 		}
 	}
 
-	// Exchange with real IdP
-	token, err := s.oauthConfig.Exchange(
+	// Exchange with real IdP using per-client credentials if available
+	token, err := s.oauthConfigForClient(clientData).Exchange(
 		ctx,
 		req.Code,
 		oauth2.SetAuthURLParam("grant_type", req.GrantTypes),
@@ -284,7 +330,12 @@ func (s *ProxyAuthHandler) RetrieveAccessToken(ctx context.Context, req *AccessT
 		return nil, err
 	}
 
-	opaqueToken.RefreshToken, err = s.encryption.Encrypt([]byte(token.RefreshToken))
+	rtData := &RefreshTokenData{Token: token.RefreshToken}
+	if clientData != nil {
+		rtData.IDPClientID = clientData.IDPClientID
+		rtData.IDPClientSecret = clientData.IDPClientSecret
+	}
+	opaqueToken.RefreshToken, err = encodeRefreshToken(rtData, s.encryption)
 
 	if err != nil {
 		span.RecordError(err)
@@ -308,21 +359,24 @@ func (s *ProxyAuthHandler) RefreshToken(ctx context.Context, refreshToken string
 		return nil, fmt.Errorf("invalid_request")
 	}
 
-	decryptedRefreshToken, err := s.encryption.Decrypt(refreshToken)
+	rtData, err := decodeRefreshToken(refreshToken, s.encryption)
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "Failed to decrypt refresh token")
 		return nil, fmt.Errorf("invalid_request")
 	}
 
-	refreshTokenValue := string(decryptedRefreshToken)
-	if refreshTokenValue == "" {
+	if rtData.Token == "" {
 		span.SetStatus(codes.Error, "Empty refresh token after decryption")
 		return nil, fmt.Errorf("invalid_request")
 	}
 
-	tokenSource := s.oauthConfig.TokenSource(ctx, &oauth2.Token{
-		RefreshToken: refreshTokenValue,
+	clientCreds := &ClientIdData{
+		IDPClientID:     rtData.IDPClientID,
+		IDPClientSecret: rtData.IDPClientSecret,
+	}
+	tokenSource := s.oauthConfigForClient(clientCreds).TokenSource(ctx, &oauth2.Token{
+		RefreshToken: rtData.Token,
 	})
 
 	token, err := tokenSource.Token()
@@ -335,7 +389,7 @@ func (s *ProxyAuthHandler) RefreshToken(ctx context.Context, refreshToken string
 	span.AddEvent("Refresh token received from IdP")
 
 	if token.RefreshToken == "" {
-		token.RefreshToken = refreshTokenValue
+		token.RefreshToken = rtData.Token
 	}
 
 	opaqueToken := token
@@ -346,7 +400,12 @@ func (s *ProxyAuthHandler) RefreshToken(ctx context.Context, refreshToken string
 		return nil, err
 	}
 
-	opaqueToken.RefreshToken, err = s.encryption.Encrypt([]byte(token.RefreshToken))
+	newRTData := &RefreshTokenData{
+		Token:           token.RefreshToken,
+		IDPClientID:     rtData.IDPClientID,
+		IDPClientSecret: rtData.IDPClientSecret,
+	}
+	opaqueToken.RefreshToken, err = encodeRefreshToken(newRTData, s.encryption)
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "Failed to encrypt refresh token")
@@ -411,6 +470,14 @@ func (s *ProxyAuthHandler) ValidateJWT(ctx context.Context, tokenString string) 
 
 	if s.config.IDP.JWTLeeway > 0 {
 		options = append(options, jwt.WithLeeway(s.config.IDP.JWTLeeway))
+	}
+
+	if s.config.IDP.ValidateAudience && s.config.IDP.Audience != "" {
+		options = append(options, jwt.WithAudience(s.config.IDP.Audience))
+	}
+
+	if s.config.IDP.ValidateIssuer && s.openidConfiguration.Issuer != "" {
+		options = append(options, jwt.WithIssuer(s.openidConfiguration.Issuer))
 	}
 
 	token, err := jwt.Parse(tokenString, keyFunc, options...)

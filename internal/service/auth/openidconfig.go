@@ -11,6 +11,7 @@ type OpenIDConfiguration struct {
 	AuthorizationEndpoint string `json:"authorization_endpoint"`
 	TokenEndpoint         string `json:"token_endpoint"`
 	JWKSEndpoint          string `json:"jwks_uri"`
+	RegistrationEndpoint  string `json:"registration_endpoint"`
 }
 
 func fetchOpenIDConfiguration(url string) (*OpenIDConfiguration, error) {

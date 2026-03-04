@@ -17,14 +17,19 @@ type Upstream struct {
 }
 
 type IDP struct {
-	ClientID               string            `mapstructure:"client_id"`
-	ClientSecret           string            `mapstructure:"client_secret"`
-	OpenIDConfigurationURL string            `mapstructure:"openid_configuration_url"`
-	Scopes                 []string          `mapstructure:"scopes"`
-	ClaimsMapping          map[string]string `mapstructure:"claims_mapping"`
-	JWTLeeway              time.Duration     `mapstructure:"jwt_leeway"`
-	FetchRetryAttempts     int               `mapstructure:"fetch_retry_attempts"`
-	FetchRetryDelay        time.Duration     `mapstructure:"fetch_retry_delay"`
+	ClientID                 string            `mapstructure:"client_id"`
+	ClientSecret             string            `mapstructure:"client_secret"`
+	OpenIDConfigurationURL   string            `mapstructure:"openid_configuration_url"`
+	Scopes                   []string          `mapstructure:"scopes"`
+	ClaimsMapping            map[string]string `mapstructure:"claims_mapping"`
+	JWTLeeway                time.Duration     `mapstructure:"jwt_leeway"`
+	FetchRetryAttempts       int               `mapstructure:"fetch_retry_attempts"`
+	FetchRetryDelay          time.Duration     `mapstructure:"fetch_retry_delay"`
+	RegistrationMode         string            `mapstructure:"registration_mode"`          // "local" (default) | "delegate"
+	RegistrationInitialToken string            `mapstructure:"registration_initial_token"` // Keycloak initial access token
+	ValidateAudience         bool              `mapstructure:"validate_audience"`
+	Audience                 string            `mapstructure:"audience"` // expected aud claim
+	ValidateIssuer           bool              `mapstructure:"validate_issuer"` // uses issuer from OIDC discovery
 }
 
 type Proxy struct {
@@ -86,6 +91,10 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	err = viper.BindEnv("idp.client_secret", "MCP_IDP_CLIENT_SECRET")
+	if err != nil {
+		return nil, err
+	}
+	err = viper.BindEnv("idp.registration_initial_token", "MCP_IDP_REGISTRATION_INITIAL_TOKEN")
 	if err != nil {
 		return nil, err
 	}

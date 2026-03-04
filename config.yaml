@@ -1,6 +1,9 @@
 proxy:
+  # base_url: https://suboral-wiley-predesirously.ngrok-free.dev
   base_url: http://localhost:8080
   listen_addr: ":8080"
+  log_level: debug
+  log_format: json
 
 idp:
   client_id: 379eab96-a9ad-401f-8158-19b130fefbf3
@@ -10,13 +13,22 @@ idp:
   scopes:
     - openid
     - offline_access
-    - profile
+    # - profile
     - 379eab96-a9ad-401f-8158-19b130fefbf3
   claims_mapping:
     sub: X_sub
     name: X_full_name
     email: X_email
-    upn: X_upn
+    upn: X-USER
+
+  # Keycloak: delegate MCP client registration to Keycloak via RFC 7591 DCR
+  # registration_mode: delegate           # "local" (default) or "delegate"
+  # registration_initial_token: ""        # Keycloak initial access token (or empty for trusted hosts)
+
+  # JWT validation (required for Keycloak tokens)
+  # validate_audience: true
+  # audience: http://localhost:8081       # upstream resource URI
+  # validate_issuer: true                 # uses issuer from OIDC discovery
 
 encryption:
   master_key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
@@ -29,6 +41,8 @@ telemetry:
 
 upstream:
   name: weather-test
+  # resource: http://localhost:8085
+  # base_url: http://localhost:8085
+  path_prefix: 
   resource: http://localhost:8081
   base_url: http://localhost:8081
-  path_prefix: /mcp

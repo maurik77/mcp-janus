@@ -507,6 +507,90 @@ func TestStateData_RoundTrip(t *testing.T) {
 	}
 }
 
+// --- TestRefreshTokenData ---
+
+func TestRefreshTokenData_RoundTrip(t *testing.T) {
+	enc := &mockEncryption{}
+
+	tests := []struct {
+		name string
+		data *RefreshTokenData
+	}{
+		{
+			name: "token only",
+			data: &RefreshTokenData{Token: "real-refresh-token"},
+		},
+		{
+			name: "token with IDP credentials",
+			data: &RefreshTokenData{
+				Token:           "real-refresh-token",
+				IDPClientID:     "kc-client-id",
+				IDPClientSecret: "kc-client-secret",
+			},
+		},
+		{
+			name: "empty IDP credentials omitted",
+			data: &RefreshTokenData{Token: "my-token"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			encoded, err := encodeRefreshToken(tt.data, enc)
+			if err != nil {
+				t.Fatalf("encodeRefreshToken() error = %v", err)
+			}
+
+			decoded, err := decodeRefreshToken(encoded, enc)
+			if err != nil {
+				t.Fatalf("decodeRefreshToken() error = %v", err)
+			}
+
+			if decoded.Token != tt.data.Token {
+				t.Errorf("Token mismatch: got %v, want %v", decoded.Token, tt.data.Token)
+			}
+			if decoded.IDPClientID != tt.data.IDPClientID {
+				t.Errorf("IDPClientID mismatch: got %v, want %v", decoded.IDPClientID, tt.data.IDPClientID)
+			}
+			if decoded.IDPClientSecret != tt.data.IDPClientSecret {
+				t.Errorf("IDPClientSecret mismatch: got %v, want %v", decoded.IDPClientSecret, tt.data.IDPClientSecret)
+			}
+		})
+	}
+}
+
+func TestDecodeRefreshToken_Fallback(t *testing.T) {
+	enc := &mockEncryption{}
+
+	// Simulate a legacy token: encrypted raw string (not JSON)
+	rawToken := "legacy-refresh-token"
+	encrypted := "encrypted_" + rawToken // what mockEncryption.Encrypt produces for raw bytes
+
+	decoded, err := decodeRefreshToken(encrypted, enc)
+	if err != nil {
+		t.Fatalf("decodeRefreshToken() error = %v", err)
+	}
+	if decoded.Token != rawToken {
+		t.Errorf("Token = %v, want %v", decoded.Token, rawToken)
+	}
+	if decoded.IDPClientID != "" {
+		t.Errorf("IDPClientID should be empty for legacy tokens, got %v", decoded.IDPClientID)
+	}
+}
+
+func TestDecodeRefreshToken_DecryptError(t *testing.T) {
+	enc := &mockEncryption{
+		decryptFunc: func(enc string) ([]byte, error) {
+			return nil, &mockEncryptionError{"decrypt failed"}
+		},
+	}
+
+	_, err := decodeRefreshToken("some-encrypted-token", enc)
+	if err == nil {
+		t.Error("expected error but got none")
+	}
+}
+
 // mockEncryptionError is a custom error type for testing
 type mockEncryptionError struct {
 	msg string

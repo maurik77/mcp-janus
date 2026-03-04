@@ -9,9 +9,14 @@ vars:
   COVERAGE_FILE: coverage.out
 
 tasks:
+  # default:
+  #   desc: Run tests and build (default target)
+  #   deps: [test, build]
+
   default:
-    desc: Run tests and build (default target)
-    deps: [test, build]
+    cmds:
+      - task -l
+    silent: true
 
   create-tls-certs:
     desc: Create self-signed TLS certificates for local development
@@ -156,6 +161,61 @@ tasks:
     internal: true
     cmds:
       - GOOS=windows GOARCH=amd64 go build -o {{.BUILD_DIR}}/{{.BINARY_NAME}}-windows-amd64.exe {{.MAIN_PATH}}
+
+  keycloak-start:
+    desc: Start Keycloak container on port 8090 (dev mode)
+    vars:
+      KC_CONTAINER: mcp-keycloak
+      KC_IMAGE: quay.io/keycloak/keycloak:26.0
+    cmds:
+      - |
+        if docker inspect {{.KC_CONTAINER}} >/dev/null 2>&1; then
+          echo "Container '{{.KC_CONTAINER}}' already exists — use 'task keycloak-stop' first."
+          exit 0
+        fi
+        docker run -d \
+          --name {{.KC_CONTAINER}} \
+          --rm \
+          -p 8090:8080 \
+          -e KC_BOOTSTRAP_ADMIN_USERNAME=admin \
+          -e KC_BOOTSTRAP_ADMIN_PASSWORD=admin \
+          {{.KC_IMAGE}} \
+          start-dev
+      - echo "Keycloak starting at http://localhost:8090 (admin/admin)"
+      - echo "Run 'task keycloak-setup' once it is ready, or use 'task keycloak' to do both."
+
+  keycloak-setup:
+    desc: Configure Keycloak realm, client, scope, and test user for MCP proxy
+    cmds:
+      - bash scripts/keycloak-setup.sh
+    env:
+      KC_BASE: "http://localhost:8090"
+      KC_REALM: "mcp"
+      KC_PROXY_CLIENT: "mcp-proxy-client"
+      KC_PROXY_SECRET: "mcp-proxy-secret"
+      KC_AUDIENCE: "http://localhost:8081"
+      KC_REDIRECT_URI: "http://localhost:8080/callback"
+      KC_TEST_USER: "devuser"
+      KC_TEST_PASS: "DevPass1!"
+
+  keycloak-stop:
+    desc: Stop and remove the Keycloak container
+    cmds:
+      - docker stop mcp-keycloak 2>/dev/null || true
+      - echo "Keycloak stopped."
+
+  keycloak:
+    desc: Start Keycloak and configure it for MCP proxy (combines start + setup)
+    cmds:
+      - task: keycloak-start
+      - task: keycloak-setup
+
+  test-integration:
+    desc: Run Keycloak E2E integration tests (requires Docker)
+    cmds:
+      - echo "Running Keycloak integration tests..."
+      - go test ./internal/service/auth/... -tags integration -timeout 300s -run TestKeycloak -v
+      - echo "✓ Integration tests complete"
 
   security:
     desc: Run security checks with gosec

@@ -42,8 +42,37 @@ type AccessTokenRequest struct {
 }
 
 type ClientIdData struct {
-	RedirectURIs []string `json:"r"`
-	Secret       string   `json:"s"`
+	RedirectURIs    []string `json:"r"`
+	Secret          string   `json:"s"`
+	IDPClientID     string   `json:"ic,omitempty"` // Keycloak-issued client_id (delegate mode)
+	IDPClientSecret string   `json:"is,omitempty"` // Keycloak-issued client_secret (delegate mode)
+}
+
+type RefreshTokenData struct {
+	Token           string `json:"t"`
+	IDPClientID     string `json:"ic,omitempty"`
+	IDPClientSecret string `json:"is,omitempty"`
+}
+
+func encodeRefreshToken(data *RefreshTokenData, enc utility.Encryption) (string, error) {
+	dataJSON, err := json.Marshal(data)
+	if err != nil {
+		return "", err
+	}
+	return enc.Encrypt(dataJSON)
+}
+
+func decodeRefreshToken(encrypted string, enc utility.Encryption) (*RefreshTokenData, error) {
+	raw, err := enc.Decrypt(encrypted)
+	if err != nil {
+		return nil, err
+	}
+	var rtData RefreshTokenData
+	if err := json.Unmarshal(raw, &rtData); err != nil {
+		// Backward compat: treat decrypted bytes as raw token string
+		return &RefreshTokenData{Token: string(raw)}, nil
+	}
+	return &rtData, nil
 }
 
 func (c *ClientIdData) Encode(encryption utility.Encryption) (string, error) {
