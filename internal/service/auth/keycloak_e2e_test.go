@@ -28,12 +28,13 @@ import (
 	"testing"
 	"time"
 
+	"mcpproxy/internal/infrastructure/config"
+	"mcpproxy/internal/utility"
+
 	"github.com/ory/dockertest/v3"
 	"github.com/ory/dockertest/v3/docker"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"mcpproxy/internal/infrastructure/config"
-	"mcpproxy/internal/utility"
 )
 
 // ─── Keycloak test constants ──────────────────────────────────────────────────
@@ -397,16 +398,22 @@ func mustSetupRealm(baseURL, adminToken string) string {
 		return s, e
 	})
 
-	// 6. Create test user.
+	// 6. Create test user with complete profile (Keycloak 26 User Profile
+	// validation requires firstName, lastName, email to be present).
 	must("create test user", func() (int, error) {
 		_, s, e := adminHTTP("POST", baseURL+"/admin/realms/"+kcRealm+"/users", adminToken, map[string]any{
-			"username": kcTestUser,
-			"enabled":  true,
+			"username":        kcTestUser,
+			"enabled":         true,
+			"emailVerified":   true,
+			"firstName":       "E2E",
+			"lastName":        "User",
+			"email":           kcTestUser + "@test.local",
+			"requiredActions": []string{},
 		})
 		return s, e
 	})
 
-	// 7. Set test user password.
+	// 8. Set test user password.
 	userID := adminGetUserID(baseURL, adminToken, kcTestUser)
 	must("set user password", func() (int, error) {
 		_, s, e := adminHTTP("PUT",
@@ -419,7 +426,7 @@ func mustSetupRealm(baseURL, adminToken string) string {
 		return s, e
 	})
 
-	// 8. Create DCR initial access token.
+	// 9. Create DCR initial access token.
 	data, status, err := adminHTTP("POST",
 		baseURL+"/admin/realms/"+kcRealm+"/clients-initial-access",
 		adminToken, map[string]any{
@@ -498,10 +505,11 @@ func mustDirectGrant(t *testing.T, scopes string) map[string]any {
 		kcBaseURL+"/realms/"+kcRealm+"/protocol/openid-connect/token", form)
 	require.NoError(t, err)
 	defer resp.Body.Close()
-	require.Equal(t, http.StatusOK, resp.StatusCode, "direct grant token request")
+	body, _ := io.ReadAll(resp.Body)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "direct grant token request: %s", body)
 
 	var result map[string]any
-	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
+	require.NoError(t, json.NewDecoder(bytes.NewReader(body)).Decode(&result))
 	require.Contains(t, result, "access_token", "token response: %v", result)
 	return result
 }
