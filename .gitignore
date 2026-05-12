@@ -1,5 +1,7 @@
 # Binaries
 bin/
+/proxy
+/mcpserver
 *.exe
 *.exe~
 *.dll
@@ -71,6 +73,9 @@ Thumbs.db
 ehthumbs.db
 Desktop.ini
 $RECYCLE.BIN/
+
+# Task checksums
+.task/checksum/
 
 # Backup files
 *.bak

@@ -8,10 +8,19 @@ vars:
   TEST_SERVER_PATH: ./cmd/mcpserver
   COVERAGE_FILE: coverage.out
 
+includes:
+  docker:
+    taskfile: .task/Taskfile_docker.yaml
+    vars:
+      RUN_PORT: "8080:8080"
+      IMAGE_NAME: mcp-janus
+      BUILD_ADDITIONAL_ARGS: '--build-arg skipSonar=true'
+
 tasks:
   default:
-    desc: Run tests and build (default target)
-    deps: [test, build]
+    cmds:
+      - task -l
+    silent: true
 
   create-tls-certs:
     desc: Create self-signed TLS certificates for local development

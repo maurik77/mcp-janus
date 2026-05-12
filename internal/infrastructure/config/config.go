@@ -3,6 +3,7 @@ package config
 
 import (
 	"encoding/hex"
+	"os"
 	"time"
 
 	"github.com/spf13/viper"
@@ -27,6 +28,7 @@ type IDP struct {
 type Proxy struct {
 	BaseURL     string `mapstructure:"base_url"`
 	ListenAddr  string `mapstructure:"listen_addr"`
+	ProbeAddr   string `mapstructure:"probe_addr"`
 	TLS         bool   `mapstructure:"tls"`
 	TLSCertFile string `mapstructure:"tls_cert_file"`
 	TLSKeyFile  string `mapstructure:"tls_key_file"`
@@ -64,9 +66,14 @@ func (c *Config) EncryptionKey() [32]byte {
 }
 
 func Load() (*Config, error) {
+	configPath := os.Getenv("CONFIG_PATH")
+	if configPath == "" {
+		configPath = "."
+	}
+
 	viper.SetConfigName("config")
 	viper.SetConfigType("yaml")
-	viper.AddConfigPath(".")
+	viper.AddConfigPath(configPath)
 
 	viper.AutomaticEnv()
 	viper.SetEnvPrefix("MCP")
@@ -79,6 +86,10 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	err = viper.BindEnv("proxy.listen_addr", "MCP_LISTEN_ADDR")
+	if err != nil {
+		return nil, err
+	}
+	err = viper.BindEnv("proxy.probe_addr", "MCP_PROBE_ADDR")
 	if err != nil {
 		return nil, err
 	}
@@ -111,6 +122,7 @@ func Load() (*Config, error) {
 	viper.SetDefault("telemetry.service_version", "1.0.0")
 	viper.SetDefault("telemetry.enabled", true)
 
+	viper.SetDefault("proxy.probe_addr", ":2113")
 	viper.SetDefault("proxy.log_level", "error")
 	viper.SetDefault("proxy.log_format", "json")
 
