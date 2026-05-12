@@ -1,0 +1,41 @@
+proxy:
+  base_url: http://localhost:8080
+  listen_addr: ":8080"
+  log_level: debug
+  log_format: json
+
+idp:
+  client_id: mcp-proxy-client
+  client_secret: mcp-proxy-secret
+  openid_configuration_url: http://localhost:8090/realms/mcp/.well-known/openid-configuration
+  jwt_leeway: 60s
+  scopes:
+    - openid
+    - profile
+    - email
+    - offline_access
+  claims_mapping:
+    sub: X-Sub
+    email: X-Email
+    name: X-Full-Name
+    preferred_username: X-Username
+    upn: X-User
+  registration_mode: delegate
+  registration_initial_token: ""
+  validate_audience: true
+  audience: http://localhost:8081
+  validate_issuer: true
+
+encryption:
+  master_key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+
+telemetry:
+  enabled: true
+  service_name: mcp-proxy
+  service_version: 1.0.0
+  otlp_endpoint: localhost:4318
+
+upstream:
+  name: weather-test
+  resource: http://localhost:8081
+  base_url: http://localhost:8081
