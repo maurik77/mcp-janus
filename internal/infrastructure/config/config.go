@@ -4,6 +4,7 @@ package config
 import (
 	"encoding/hex"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/spf13/viper"
@@ -80,9 +81,13 @@ func (c *Config) EncryptionKey() ([32]byte, error) {
 }
 
 func Load() (*Config, error) {
-	viper.SetConfigName("config")
-	viper.SetConfigType("yaml")
-	viper.AddConfigPath(".")
+	if cfgFile := os.Getenv("MCP_CONFIG_FILE"); cfgFile != "" {
+		viper.SetConfigFile(cfgFile)
+	} else {
+		viper.SetConfigName("config")
+		viper.SetConfigType("yaml")
+		viper.AddConfigPath(".")
+	}
 
 	viper.AutomaticEnv()
 	viper.SetEnvPrefix("MCP")

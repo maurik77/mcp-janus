@@ -102,6 +102,22 @@ tasks:
         fi
       - go run {{.MAIN_PATH}}
 
+  run-local:
+    desc: Build and run the proxy server with the local IdP (config.yaml)
+    deps: [build]
+    cmds:
+      - echo "Starting MCP proxy server with local IdP..."
+      - go run {{.MAIN_PATH}}
+
+  run-keycloak:
+    desc: Build and run the proxy server with Keycloak IdP (config-keycloak.yaml)
+    deps: [build]
+    env:
+      MCP_CONFIG_FILE: config-keycloak.yaml
+    cmds:
+      - echo "Starting MCP proxy server with Keycloak IdP (http://localhost:8090)..."
+      - go run {{.MAIN_PATH}}
+
   install:
     desc: Download and verify dependencies
     cmds:
@@ -197,6 +213,11 @@ tasks:
       KC_REDIRECT_URI: "http://localhost:8080/callback"
       KC_TEST_USER: "devuser"
       KC_TEST_PASS: "DevPass1!"
+      # Azure AD B2C federation (optional — leave empty to skip IdP setup)
+      AZURE_TENANT_ID: ""
+      AZURE_CLIENT_ID: ""
+      AZURE_CLIENT_SECRET: ""
+      AZURE_OIDC_URL: ""
 
   keycloak-stop:
     desc: Stop and remove the Keycloak container

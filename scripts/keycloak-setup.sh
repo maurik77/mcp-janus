@@ -266,6 +266,82 @@ create_initial_token() {
   echo "$iat"   # returned to caller
 }
 
+# ─── Identity Provider federation (Azure AD B2C) ──────────────────────────────
+
+configure_azure_idp() {
+  local token="$1"
+  hdr "Identity Provider: Azure AD B2C"
+
+  # Create the OIDC Identity Provider
+  admin_post "/admin/realms/${KC_REALM}/identity-provider/instances" "$token" \
+    "$(jq -n \
+        --arg cid  "$AZURE_CLIENT_ID" \
+        --arg csec "$AZURE_CLIENT_SECRET" \
+        --arg disc "$AZURE_OIDC_URL" \
+        '{
+          alias:                       "azure-b2c",
+          displayName:                 "Azure AD B2C",
+          providerId:                  "oidc",
+          enabled:                     true,
+          trustEmail:                  true,
+          firstBrokerLoginFlowAlias:   "first broker login",
+          config: {
+            clientId:          $cid,
+            clientSecret:      $csec,
+            discoveryEndpoint: $disc,
+            defaultScopes:     "openid profile email",
+            syncMode:          "IMPORT"
+          }
+        }')" \
+    | expect "201 409" "identity provider 'azure-b2c'"
+
+  # Add attribute mappers for key claims
+  for CLAIM in email name preferred_username upn; do
+    admin_post \
+      "/admin/realms/${KC_REALM}/identity-provider/instances/azure-b2c/mappers" "$token" \
+      "$(jq -n \
+          --arg claim "$CLAIM" \
+          '{
+            name:                     ("map-" + $claim),
+            identityProviderMapper:   "oidc-user-attribute-idp-mapper",
+            identityProviderAlias:    "azure-b2c",
+            config: {
+              claim:    $claim,
+              attribute: $claim,
+              syncMode: "INHERIT"
+            }
+          }')" \
+      | expect "201 409" "claim mapper '${CLAIM}'"
+  done
+
+  # Add a protocol mapper on the proxy client to expose "upn" in Keycloak JWTs
+  local client_uuid
+  client_uuid=$(admin_get \
+    "/admin/realms/${KC_REALM}/clients?clientId=${KC_PROXY_CLIENT}" "$token" \
+    | jq -r '.[0].id')
+  [ -n "$client_uuid" ] && [ "$client_uuid" != "null" ] \
+    || fail "proxy client '${KC_PROXY_CLIENT}' not found"
+
+  admin_post \
+    "/admin/realms/${KC_REALM}/clients/${client_uuid}/protocol-mappers/models" "$token" \
+    "$(jq -n '{
+      name:           "upn-mapper",
+      protocol:       "openid-connect",
+      protocolMapper: "oidc-usermodel-attribute-mapper",
+      config: {
+        "user.attribute":      "upn",
+        "claim.name":          "upn",
+        "jsonType.label":      "String",
+        "id.token.claim":      "true",
+        "access.token.claim":  "true",
+        "userinfo.token.claim":"true"
+      }
+    }')" \
+    | expect "201 409" "protocol mapper 'upn' on proxy client"
+
+  ok "Azure AD B2C identity provider configured"
+}
+
 # ─── Summary ──────────────────────────────────────────────────────────────────
 
 print_summary() {
@@ -319,6 +395,16 @@ main() {
   create_test_user    "$TOKEN"
 
   IAT=$(create_initial_token "$TOKEN")
+
+  # Azure AD B2C federation (optional)
+  AZURE_CLIENT_ID="${AZURE_CLIENT_ID:-}"
+  if [ -n "$AZURE_CLIENT_ID" ]; then
+    AZURE_CLIENT_SECRET="${AZURE_CLIENT_SECRET:-}"
+    AZURE_OIDC_URL="${AZURE_OIDC_URL:-}"
+    configure_azure_idp "$TOKEN"
+  else
+    log "AZURE_CLIENT_ID not set — skipping Identity Provider federation."
+  fi
 
   print_summary "$IAT"
 }
