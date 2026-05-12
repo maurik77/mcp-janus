@@ -1,0 +1,44 @@
+---
+version: '3'
+
+vars:
+  HELM_TEMPLATE_NAME: '{{.HELM_TEMPLATE_NAME | default "!MISSING_REQUIRED_HELM_TEMPLATE_NAME!"}}'
+  HELM_VALUES_ARG: '{{.HELM_VALUES_ARG | default ""}}'
+  HELM_CHART_ROOT_DIRECTORY: '{{.HELM_CHART_ROOT_DIRECTORY | default ".helm"}}'
+  KUBE_NAMESPACE: '{{.KUBE_NAMESPACE | default "default"}}'
+  TEST_FILE_NAME: '{{.TEST_FILE_NAME | default ".helm/test.yaml"}}'
+  CREATE_NAMESPACE: '{{.CREATE_NAMESPACE | default "false"}}'
+  HELM_SECRET_ARG: '{{.HELM_SECRET_ARG | default ""}}'
+
+tasks:
+  debug-create-testfile:
+    desc: 'Generate rendered template to "{{.TEST_FILE_NAME}}" (runs dependency update first)'
+    cmds:
+      - helm dependency update {{.HELM_CHART_ROOT_DIRECTORY}}
+      - task: debug-create-testfile-no-deps
+    silent: false
+
+  debug-create-testfile-no-deps:
+    desc: 'Generate rendered template to "{{.TEST_FILE_NAME}}" (skips dependency update)'
+    cmds:
+      - helm template --debug {{.HELM_VALUES_ARG}} {{.HELM_TEMPLATE_NAME}} {{.HELM_CHART_ROOT_DIRECTORY}} --namespace {{.KUBE_NAMESPACE}} > {{.TEST_FILE_NAME}}
+    silent: false
+
+  template-install:
+    desc: 'Install or upgrade Helm release "{{.HELM_TEMPLATE_NAME}}" into namespace {{.KUBE_NAMESPACE}}'
+    cmds:
+      - helm upgrade -i {{.HELM_VALUES_ARG}} {{.HELM_TEMPLATE_NAME}} {{.HELM_CHART_ROOT_DIRECTORY}} --namespace {{.KUBE_NAMESPACE}} {{if eq .CREATE_NAMESPACE "true"}}--create-namespace{{end}}
+    silent: false
+
+  template-uninstall:
+    desc: 'Uninstall Helm release "{{.HELM_TEMPLATE_NAME}}" from namespace {{.KUBE_NAMESPACE}}'
+    cmds:
+      - helm uninstall {{.HELM_TEMPLATE_NAME}} --namespace {{.KUBE_NAMESPACE}}
+    silent: false
+
+  setup-prerequisites:
+    desc: 'Create namespace and apply secrets (first-time environment setup)'
+    cmds:
+      - '{{if eq .CREATE_NAMESPACE "true"}}kubectl create namespace {{.KUBE_NAMESPACE}} --dry-run=client -o yaml | kubectl apply -f -{{end}}'
+      - '{{if .HELM_SECRET_ARG}}kubectl apply {{.HELM_SECRET_ARG}} -n {{.KUBE_NAMESPACE}}{{end}}'
+    silent: false

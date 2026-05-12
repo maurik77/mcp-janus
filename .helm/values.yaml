@@ -3,7 +3,7 @@ replicaCount: 1
 
 image:
   # Container image repository.
-  repository: mcp-proxy
+  repository: mcp-janus
   # Image tag.
   tag: latest
   # Image pull policy: Always, IfNotPresent, Never.

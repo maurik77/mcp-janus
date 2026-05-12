@@ -12,9 +12,18 @@ includes:
   docker:
     taskfile: .task/Taskfile_docker.yaml
     vars:
-      RUN_PORT: "8080:8080"
       IMAGE_NAME: mcp-janus
       BUILD_ADDITIONAL_ARGS: '--build-arg skipSonar=true'
+      RUN_PORT: "8080:8080"
+      RUN_ADDITIONAL_PORTS: "2113:2113"
+      RUN_ENV_VARIABLES: "-e MCP_IDP_CLIENT_SECRET"
+  helm:
+    taskfile: .task/Taskfile_helm.yaml
+    vars:
+      HELM_TEMPLATE_NAME: mcp-janus
+      HELM_CHART_ROOT_DIRECTORY: .helm
+      KUBE_NAMESPACE: mcp-janus
+      CREATE_NAMESPACE: "true"
 
 tasks:
   default:

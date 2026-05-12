@@ -77,6 +77,9 @@ $RECYCLE.BIN/
 # Task checksums
 .task/checksum/
 
+# Helm rendered output
+.helm/test.yaml
+
 # Backup files
 *.bak
 *.backup

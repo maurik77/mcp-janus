@@ -7,9 +7,10 @@ vars:
   DOCKER_FILE_NAME: '{{.DOCKER_FILE_NAME | default "./Dockerfile.proxy"}}'
   BUILD_ENV_VARIABLES: '{{.BUILD_ENV_VARIABLES | default ""}}'
   BUILD_CONTEXT_PATH: '{{.BUILD_CONTEXT_PATH | default "."}}'
-  BUILD_ADDITIONAL_ARGS: '{{.BUILD_ADDITIONAL_ARGS | default ""}}' # nel valore inserire il nome dell'argomento e il suo valore, se necessario anche più volte (es. BUILD_ADDITIONAL_ARGS: "--build-arg varname=value")
+  BUILD_ADDITIONAL_ARGS: '{{.BUILD_ADDITIONAL_ARGS | default ""}}' # use this to pass --build-arg flags (e.g. "--build-arg varname=value")
   RUN_COMMAND: '{{.RUN_COMMAND | default ""}}'
   RUN_PORT: '{{.RUN_PORT | default "!MISSING_REQUIRED_PORT!"}}'
+  RUN_ADDITIONAL_PORTS: '{{.RUN_ADDITIONAL_PORTS | default ""}}'
   RUN_ENV_VARIABLES: '{{.RUN_ENV_VARIABLES | default ""}}'
 
 tasks:
@@ -24,7 +25,7 @@ tasks:
     deps:
       - build
     cmds:
-      - docker run -it --rm {{.RUN_ENV_VARIABLES}} -p {{.RUN_PORT}} -t {{.IMAGE_NAME}} {{.RUN_COMMAND}}
+      - docker run -it --rm {{.RUN_ENV_VARIABLES}} -p {{.RUN_PORT}} {{if .RUN_ADDITIONAL_PORTS}}-p {{.RUN_ADDITIONAL_PORTS}}{{end}} {{.IMAGE_NAME}}:{{.IMAGE_TAG}} {{.RUN_COMMAND}}
     silent: false
 
   load-into-kind:
