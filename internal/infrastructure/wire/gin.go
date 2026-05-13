@@ -73,9 +73,9 @@ func NewGinEngine(config *config.Config,
 	authorized := r.Group("/mcp")
 	authorized.Use(ginAuthMiddleware(proxy))
 	{
-		authorized.Any("/*path", func(c *gin.Context) {
-			proxy.ProxyHandler(c.Writer, c.Request)
-		})
+		handler := func(c *gin.Context) { proxy.ProxyHandler(c.Writer, c.Request) }
+		authorized.Any("", handler)
+		authorized.Any("/*path", handler)
 	}
 
 	// Health
