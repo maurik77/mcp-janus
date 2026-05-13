@@ -18,6 +18,7 @@ data:
       client_id: {{ .Values.idp.clientId | quote }}
       client_secret: ""
       openid_configuration_url: {{ .Values.idp.openidConfigurationUrl | quote }}
+      skip_tls_verify: {{ .Values.idp.skipTlsVerify | default false }}
       jwt_leeway: {{ .Values.idp.jwtLeeway | quote }}
       scopes:
         {{- range .Values.idp.scopes }}

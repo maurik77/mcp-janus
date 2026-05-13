@@ -17,12 +17,13 @@ type Upstream struct {
 }
 
 type IDP struct {
-	ClientID               string            `mapstructure:"client_id"`
-	ClientSecret           string            `mapstructure:"client_secret"`
-	OpenIDConfigurationURL string            `mapstructure:"openid_configuration_url"`
-	Scopes                 []string          `mapstructure:"scopes"`
-	ClaimsMapping          map[string]string `mapstructure:"claims_mapping"`
-	JWTLeeway              time.Duration     `mapstructure:"jwt_leeway"`
+	ClientID                       string            `mapstructure:"client_id"`
+	ClientSecret                   string            `mapstructure:"client_secret"`
+	OpenIDConfigurationURL         string            `mapstructure:"openid_configuration_url"`
+	Scopes                         []string          `mapstructure:"scopes"`
+	ClaimsMapping                  map[string]string `mapstructure:"claims_mapping"`
+	JWTLeeway                      time.Duration     `mapstructure:"jwt_leeway"`
+	SkipTLSVerify                  bool              `mapstructure:"skip_tls_verify"`
 }
 
 type Proxy struct {
@@ -117,6 +118,10 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	err = viper.BindEnv("idp.skip_tls_verify", "MCP_IDP_SKIP_TLS_VERIFY")
+	if err != nil {
+		return nil, err
+	}
 	if err := viper.ReadInConfig(); err != nil {
 		return nil, err
 	}
@@ -129,6 +134,7 @@ func Load() (*Config, error) {
 	viper.SetDefault("proxy.probe_addr", ":2113")
 	viper.SetDefault("proxy.log_level", "error")
 	viper.SetDefault("proxy.log_format", "json")
+	viper.SetDefault("idp.skip_tls_verify", false)
 
 	var cfg Config
 	if err := viper.Unmarshal(&cfg); err != nil {

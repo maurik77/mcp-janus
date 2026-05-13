@@ -28,7 +28,7 @@ type ProxyAuthHandler struct {
 }
 
 func New(cfg config.Config, encryption utility.Encryption) (Service, error) {
-	openidConfiguration, err := fetchOpenIDConfiguration(cfg.IDP.OpenIDConfigurationURL)
+	openidConfiguration, err := fetchOpenIDConfiguration(cfg.IDP.OpenIDConfigurationURL, cfg.IDP.SkipTLSVerify)
 	if err != nil {
 		return nil, err
 	}

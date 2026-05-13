@@ -10,8 +10,10 @@ RUN go mod download
 # Copy source code
 COPY . .
 
+ARG GOARCH=amd64
+
 # Build
-RUN CGO_ENABLED=0 GOOS=linux go build -o mcpproxy ./cmd/proxy
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=${GOARCH} go build -o mcpproxy ./cmd/proxy
 
 # Final stage
 FROM scratch
