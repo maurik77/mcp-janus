@@ -113,6 +113,10 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	err = viper.BindEnv("encryption.master_key", "MCP_ENCRYPTION_MASTER_KEY")
+	if err != nil {
+		return nil, err
+	}
 	if err := viper.ReadInConfig(); err != nil {
 		return nil, err
 	}

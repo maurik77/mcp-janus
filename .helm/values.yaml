@@ -45,8 +45,8 @@ idp:
   claimsMapping: {}
 
 encryption:
-  # AES-256-GCM master key (hex-encoded, 64 characters) used to encrypt opaque bearer tokens.
-  # Treat this value as a secret — provide it via env or a Kubernetes Secret reference in `env`.
+  # Never set masterKey here — it is always injected via MCP_ENCRYPTION_MASTER_KEY env var
+  # from a Kubernetes Secret (see env section below).
   masterKey: ""
 
 telemetry:
@@ -79,6 +79,9 @@ upstream:
 #       secretKeyRef:
 #         name: mcp-janus-secrets
 #         key: idp-client-secret
-#   - name: SOME_PLAIN_VAR
-#     value: "some-value"
+#   - name: MCP_ENCRYPTION_MASTER_KEY
+#     valueFrom:
+#       secretKeyRef:
+#         name: mcp-janus-secrets
+#         key: encryption-master-key
 env: []

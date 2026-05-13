@@ -20,6 +20,7 @@ spec:
         - name: proxy
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/app/mcpproxy"]
           ports:
             - name: http
               containerPort: 8080

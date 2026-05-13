@@ -29,7 +29,7 @@ data:
         {{- end }}
 
     encryption:
-      master_key: {{ .Values.encryption.masterKey | quote }}
+      master_key: ""
 
     telemetry:
       enabled: {{ .Values.telemetry.enabled }}
