@@ -33,7 +33,7 @@ func New(cfg config.Config, encryption utility.Encryption) (Service, error) {
 		return nil, err
 	}
 
-	jwks, err := fetchJWKS(openidConfiguration.JWKSEndpoint)
+	jwks, err := fetchJWKS(openidConfiguration.JWKSEndpoint, cfg.IDP.SkipTLSVerify)
 	if err != nil {
 		return nil, err
 	}

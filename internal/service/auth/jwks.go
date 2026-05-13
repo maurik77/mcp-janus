@@ -2,6 +2,7 @@ package auth
 
 import (
 	"crypto/rsa"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
@@ -24,8 +25,15 @@ type JWK struct {
 	publicKey *rsa.PublicKey
 }
 
-func fetchJWKS(url string) (*JWKS, error) {
-	resp, err := http.Get(url)
+func fetchJWKS(url string, skipTLSVerify bool) (*JWKS, error) {
+	client := &http.Client{}
+	if skipTLSVerify {
+		client.Transport = &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec
+		}
+	}
+
+	resp, err := client.Get(url)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch JWKS: %w", err)
 	}
