@@ -87,14 +87,19 @@ func New(cfg config.Config, encryption utility.Encryption) (Service, error) {
 		Scopes: cfg.IDP.Scopes,
 	}
 
-	return &ProxyAuthHandler{
+	handler := &ProxyAuthHandler{
 		config:              cfg,
 		oauthConfig:         oauthConfig,
 		encryption:          encryption,
 		openidConfiguration: openidConfiguration,
 		jwks:                jwks,
 		tracer:              otel.Tracer("mcp-proxy.auth"),
-	}, nil
+	}
+	utility.Logger.Info().
+		Str("issuer", openidConfiguration.Issuer).
+		Int("jwks_keys", len(jwks.Keys)).
+		Msg("Auth service initialized")
+	return handler, nil
 }
 
 func (s *ProxyAuthHandler) RegisterClient(ctx context.Context, req *RegisterRequest) (*RegisterResponse, error) {
@@ -110,6 +115,7 @@ func (s *ProxyAuthHandler) RegisterClient(ctx context.Context, req *RegisterRequ
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "Failed to generate client ID")
+		utility.Logger.Error().Err(err).Msg("Failed to generate client ID")
 		return nil, err
 	}
 
@@ -121,8 +127,7 @@ func (s *ProxyAuthHandler) RegisterClient(ctx context.Context, req *RegisterRequ
 		ClientSecret: secret,
 	}
 
-	// log response for demo purposes
-	utility.Logger.Info().Interface("client", res).Msg("Registered client")
+	utility.Logger.Info().Str("client_id", clientId).Msg("Client registered successfully")
 
 	return &res, nil
 }
@@ -133,6 +138,7 @@ func (s *ProxyAuthHandler) AuthenticateRequest(ctx context.Context, req *Authent
 
 	if req == nil || req.ClientID == "" {
 		span.SetStatus(codes.Error, "Invalid request")
+		utility.Logger.Warn().Msg("AuthenticateRequest: missing client_id")
 		return "", fmt.Errorf("invalid_request")
 	}
 
@@ -148,12 +154,17 @@ func (s *ProxyAuthHandler) AuthenticateRequest(ctx context.Context, req *Authent
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "Failed to decode client ID")
+		utility.Logger.Warn().Err(err).Str("client_id", req.ClientID).Msg("AuthenticateRequest: failed to decode client_id")
 		return "", fmt.Errorf("invalid_request")
 	}
 
 	// check redirect_uri is in clientData.RedirectURIs
 	if !slices.Contains(clientData.RedirectURIs, req.RedirectURI) {
 		span.SetStatus(codes.Error, "Invalid redirect URI")
+		utility.Logger.Warn().
+			Str("client_id", req.ClientID).
+			Str("redirect_uri", req.RedirectURI).
+			Msg("AuthenticateRequest: redirect_uri not registered for client")
 		return "", fmt.Errorf("invalid_request")
 	}
 
@@ -167,6 +178,7 @@ func (s *ProxyAuthHandler) AuthenticateRequest(ctx context.Context, req *Authent
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "Failed to encrypt state")
+		utility.Logger.Error().Err(err).Str("client_id", req.ClientID).Msg("AuthenticateRequest: failed to encrypt state")
 		return "", fmt.Errorf("invalid_request")
 	}
 
@@ -187,31 +199,40 @@ func (s *ProxyAuthHandler) AuthenticateRequest(ctx context.Context, req *Authent
 
 func (s *ProxyAuthHandler) ManageAuthorizationCode(ctx context.Context, req *AuthorizationCodeData) (*AuthorizationCodeData, *url.URL, error) {
 	if req == nil {
+		utility.Logger.Warn().Msg("ManageAuthorizationCode: nil request")
 		return nil, nil, fmt.Errorf("invalid_request")
 	}
 	// Decrypt and decode state
 	stateData, err := DecodeStateData(req.State, s.encryption)
 	if err != nil {
+		utility.Logger.Warn().Err(err).Msg("ManageAuthorizationCode: failed to decode state")
 		return nil, nil, fmt.Errorf("invalid_request")
 	}
 
 	// Validate redirect URI against registered client
 	clientData, err := DecodeClientID(stateData.ClientID, s.encryption)
 	if err != nil {
+		utility.Logger.Warn().Err(err).Str("client_id", stateData.ClientID).Msg("ManageAuthorizationCode: failed to decode client_id")
 		return nil, nil, fmt.Errorf("invalid_request")
 	}
 
 	if !slices.Contains(clientData.RedirectURIs, stateData.RedirectURI) {
+		utility.Logger.Warn().
+			Str("client_id", stateData.ClientID).
+			Str("redirect_uri", stateData.RedirectURI).
+			Msg("ManageAuthorizationCode: redirect_uri not registered for client")
 		return nil, nil, fmt.Errorf("invalid_request")
 	}
 
 	// Validate redirect URI is a well-formed absolute URL with http(s) scheme
 	redirectURL, err := url.Parse(stateData.RedirectURI)
 	if err != nil {
+		utility.Logger.Warn().Err(err).Str("redirect_uri", stateData.RedirectURI).Msg("ManageAuthorizationCode: invalid redirect_uri")
 		return nil, nil, fmt.Errorf("invalid_request")
 	}
 
 	if redirectURL.Host == "" || (redirectURL.Scheme != "http" && redirectURL.Scheme != "https") {
+		utility.Logger.Warn().Str("redirect_uri", stateData.RedirectURI).Msg("ManageAuthorizationCode: redirect_uri has invalid scheme or missing host")
 		return nil, nil, fmt.Errorf("invalid_request")
 	}
 
@@ -220,7 +241,10 @@ func (s *ProxyAuthHandler) ManageAuthorizationCode(ctx context.Context, req *Aut
 		Code:  req.Code,
 	}
 
-	utility.Logger.Info().Interface("auth_code_data", res).Msg("Authorization code data")
+	utility.Logger.Info().
+		Str("client_id", stateData.ClientID).
+		Str("redirect_uri", redirectURL.String()).
+		Msg("Authorization code dispatched to client")
 
 	return res, redirectURL, nil
 }
@@ -231,11 +255,13 @@ func (s *ProxyAuthHandler) RetrieveAccessToken(ctx context.Context, req *AccessT
 
 	if req == nil {
 		span.SetStatus(codes.Error, "Invalid request")
+		utility.Logger.Warn().Msg("RetrieveAccessToken: nil request")
 		return nil, fmt.Errorf("invalid_request")
 	}
 
 	if req.Code == "" {
 		span.SetStatus(codes.Error, "Missing required parameters")
+		utility.Logger.Warn().Str("client_id", req.ClientID).Msg("RetrieveAccessToken: missing authorization code")
 		return nil, fmt.Errorf("invalid_request")
 	}
 
@@ -249,13 +275,13 @@ func (s *ProxyAuthHandler) RetrieveAccessToken(ctx context.Context, req *AccessT
 		if err != nil {
 			span.RecordError(err)
 			span.SetStatus(codes.Error, "Failed to decode client ID")
-
+			utility.Logger.Warn().Err(err).Str("client_id", req.ClientID).Msg("RetrieveAccessToken: failed to decode client_id")
 			return nil, err
 		}
 
 		if clientData.Secret != req.ClientSecret {
 			span.SetStatus(codes.Error, "Invalid client secret")
-
+			utility.Logger.Warn().Str("client_id", req.ClientID).Msg("RetrieveAccessToken: client secret mismatch")
 			return nil, fmt.Errorf("invalid_request")
 		}
 	}
@@ -271,6 +297,7 @@ func (s *ProxyAuthHandler) RetrieveAccessToken(ctx context.Context, req *AccessT
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "Token exchange failed")
+		utility.Logger.Error().Err(err).Str("client_id", req.ClientID).Msg("RetrieveAccessToken: token exchange with IdP failed")
 		return nil, fmt.Errorf("invalid_request")
 	}
 
@@ -282,6 +309,7 @@ func (s *ProxyAuthHandler) RetrieveAccessToken(ctx context.Context, req *AccessT
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "Failed to encrypt access token")
+		utility.Logger.Error().Err(err).Str("client_id", req.ClientID).Msg("RetrieveAccessToken: failed to encrypt access token")
 		return nil, err
 	}
 
@@ -290,12 +318,17 @@ func (s *ProxyAuthHandler) RetrieveAccessToken(ctx context.Context, req *AccessT
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "Failed to encrypt refresh token")
+		utility.Logger.Error().Err(err).Str("client_id", req.ClientID).Msg("RetrieveAccessToken: failed to encrypt refresh token")
 		return nil, err
 	}
 
 	span.SetStatus(codes.Ok, "Token exchange successful")
 
-	utility.Logger.Info().Str("access_token", opaqueToken.AccessToken).Msg("Access token received")
+	utility.Logger.Info().
+		Str("client_id", req.ClientID).
+		Str("token_type", opaqueToken.TokenType).
+		Time("expiry", opaqueToken.Expiry).
+		Msg("Access token issued to client")
 
 	return opaqueToken, err
 }
@@ -306,6 +339,7 @@ func (s *ProxyAuthHandler) RefreshToken(ctx context.Context, refreshToken string
 
 	if refreshToken == "" {
 		span.SetStatus(codes.Error, "Missing refresh token")
+		utility.Logger.Warn().Msg("RefreshToken: empty refresh token")
 		return nil, fmt.Errorf("invalid_request")
 	}
 
@@ -313,12 +347,14 @@ func (s *ProxyAuthHandler) RefreshToken(ctx context.Context, refreshToken string
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "Failed to decrypt refresh token")
+		utility.Logger.Warn().Err(err).Msg("RefreshToken: failed to decrypt refresh token")
 		return nil, fmt.Errorf("invalid_request")
 	}
 
 	refreshTokenValue := string(decryptedRefreshToken)
 	if refreshTokenValue == "" {
 		span.SetStatus(codes.Error, "Empty refresh token after decryption")
+		utility.Logger.Warn().Msg("RefreshToken: refresh token empty after decryption")
 		return nil, fmt.Errorf("invalid_request")
 	}
 
@@ -330,6 +366,7 @@ func (s *ProxyAuthHandler) RefreshToken(ctx context.Context, refreshToken string
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "Refresh token exchange failed")
+		utility.Logger.Error().Err(err).Msg("RefreshToken: token exchange with IdP failed")
 		return nil, fmt.Errorf("invalid_request")
 	}
 
@@ -344,6 +381,7 @@ func (s *ProxyAuthHandler) RefreshToken(ctx context.Context, refreshToken string
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "Failed to encrypt access token")
+		utility.Logger.Error().Err(err).Msg("RefreshToken: failed to encrypt access token")
 		return nil, err
 	}
 
@@ -351,11 +389,15 @@ func (s *ProxyAuthHandler) RefreshToken(ctx context.Context, refreshToken string
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "Failed to encrypt refresh token")
+		utility.Logger.Error().Err(err).Msg("RefreshToken: failed to encrypt refresh token")
 		return nil, err
 	}
 
 	span.SetStatus(codes.Ok, "Refresh token exchange successful")
-	utility.Logger.Info().Str("access_token", opaqueToken.AccessToken).Msg("Refresh access token received")
+	utility.Logger.Info().
+		Str("token_type", opaqueToken.TokenType).
+		Time("expiry", opaqueToken.Expiry).
+		Msg("Refresh token exchanged, new access token issued")
 
 	return opaqueToken, nil
 }

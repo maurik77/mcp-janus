@@ -4,6 +4,10 @@
 			"url": "http://localhost:8080/mcp",
 			"type": "http"
 		},
+		"company-welfare": {
+			"url": "https://welfareportalsvil.poste.it/ai/mcp/",
+			"type": "http"
+		},		
 		// "mcp-hello-world": {
 		// 	"url": "http://localhost:8081/mcp",
 		// 	"type": "http"
