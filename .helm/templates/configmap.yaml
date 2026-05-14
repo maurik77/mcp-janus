@@ -28,6 +28,10 @@ data:
         {{- range $k, $v := .Values.idp.claimsMapping }}
         {{ $k }}: {{ $v | quote }}
         {{- end }}
+      fixed_headers:
+        {{- range $k, $v := .Values.idp.fixedHeaders }}
+        {{ $k }}: {{ $v | quote }}
+        {{- end }}        
 
     encryption:
       master_key: ""

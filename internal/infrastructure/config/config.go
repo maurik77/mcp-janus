@@ -23,6 +23,7 @@ type IDP struct {
 	OpenIDConfigurationURL string            `mapstructure:"openid_configuration_url"`
 	Scopes                 []string          `mapstructure:"scopes"`
 	ClaimsMapping          map[string]string `mapstructure:"claims_mapping"`
+	FixedHeaders           map[string]string `mapstructure:"fixed_headers"`
 	JWTLeeway              time.Duration     `mapstructure:"jwt_leeway"`
 	SkipTLSVerify          bool              `mapstructure:"skip_tls_verify"`
 	FetchRetryAttempts     int               `mapstructure:"fetch_retry_attempts"`

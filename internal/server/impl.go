@@ -145,6 +145,10 @@ func (p *proxy) AuthMiddleware() func(http.Handler) http.Handler {
 				}
 			}
 
+			for header, value := range p.cfg.IDP.FixedHeaders {
+				r.Header.Set(header, value)
+			}
+
 			span.SetStatus(codes.Ok, "Authentication successful")
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
