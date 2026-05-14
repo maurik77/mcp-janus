@@ -71,6 +71,11 @@ func NewProxy(cfg config.Config,
 		return nil
 	}
 
+	utility.Logger.Info().
+		Str("upstream_url", targetURL.String()).
+		Str("upstream_name", cfg.Upstream.Name).
+		Msg("Proxy initialized")
+
 	return &proxy{
 		cfg:          cfg,
 		metadata:     metadata,
@@ -91,6 +96,7 @@ func (p *proxy) AuthMiddleware() func(http.Handler) http.Handler {
 
 			token, ok := extractBearerToken(r)
 			if !ok {
+				utility.Logger.Warn().Str("remote_addr", r.RemoteAddr).Msg("AuthMiddleware: missing or invalid bearer token")
 				span.SetStatus(codes.Error, "Missing or invalid bearer token")
 				w.Header().Set("WWW-Authenticate", p.metadata.WWWAuthenticateHeader())
 				http.Error(w, `{"error":"invalid_token"}`, http.StatusUnauthorized)
@@ -102,6 +108,7 @@ func (p *proxy) AuthMiddleware() func(http.Handler) http.Handler {
 			// Decrypt opaque token
 			data, err := p.encryption.Decrypt(token)
 			if err != nil {
+				utility.Logger.Warn().Err(err).Str("remote_addr", r.RemoteAddr).Msg("AuthMiddleware: token decryption failed")
 				span.RecordError(err)
 				span.SetStatus(codes.Error, "Token decryption failed")
 				http.Error(w, `{"error":"invalid_token"}`, http.StatusUnauthorized)
@@ -112,6 +119,7 @@ func (p *proxy) AuthMiddleware() func(http.Handler) http.Handler {
 
 			jwtToken, err := p.auth.ValidateJWT(ctx, string(data))
 			if err != nil || !jwtToken.Valid {
+				utility.Logger.Warn().Err(err).Str("remote_addr", r.RemoteAddr).Msg("AuthMiddleware: JWT validation failed")
 				if err != nil {
 					span.RecordError(err)
 				}
@@ -125,6 +133,7 @@ func (p *proxy) AuthMiddleware() func(http.Handler) http.Handler {
 			// Extract claims
 			claims, ok := jwtToken.Claims.(jwt.MapClaims)
 			if !ok {
+				utility.Logger.Warn().Str("remote_addr", r.RemoteAddr).Msg("AuthMiddleware: failed to parse JWT claims")
 				span.SetStatus(codes.Error, "Failed to parse claims")
 				http.Error(w, `{"error":"invalid_token"}`, http.StatusUnauthorized)
 				return
@@ -133,6 +142,7 @@ func (p *proxy) AuthMiddleware() func(http.Handler) http.Handler {
 			// Add subject to span attributes
 			if sub, ok := claims["sub"].(string); ok {
 				span.SetAttributes(attribute.String("user.id", sub))
+				utility.Logger.Info().Str("sub", sub).Str("remote_addr", r.RemoteAddr).Msg("AuthMiddleware: authentication successful")
 			}
 
 			ctx = context.WithValue(ctx, keyRealToken, token)
@@ -167,6 +177,12 @@ func (p *proxy) ProxyHandler(w http.ResponseWriter, r *http.Request) {
 		attribute.String("upstream.target_url", p.targetURL.String()),
 	)
 	span.AddEvent("Forwarding request to upstream")
+	utility.Logger.Info().
+		Str("method", r.Method).
+		Str("path", r.URL.Path).
+		Str("upstream", p.cfg.Upstream.Name).
+		Str("target_url", p.targetURL.String()).
+		Msg("ProxyHandler: forwarding request to upstream")
 
 	p.reverseProxy.ServeHTTP(w, r)
 }
