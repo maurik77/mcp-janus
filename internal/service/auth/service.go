@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"net/url"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -8,10 +9,10 @@ import (
 )
 
 type Service interface {
-	RegisterClient(req *RegisterRequest) (*RegisterResponse, error)
-	AuthenticateRequest(req *AuthenticateRequest) (string, error)
-	ManageAuthorizationCode(req *AuthorizationCodeData) (*AuthorizationCodeData, *url.URL, error)
-	RetrieveAccessToken(req *AccessTokenRequest) (*oauth2.Token, error)
-	RefreshToken(refreshToken string) (*oauth2.Token, error)
-	ValidateJWT(tokenString string) (*jwt.Token, error)
+	RegisterClient(ctx context.Context, req *RegisterRequest) (*RegisterResponse, error)
+	AuthenticateRequest(ctx context.Context, req *AuthenticateRequest) (string, error)
+	ManageAuthorizationCode(ctx context.Context, req *AuthorizationCodeData) (*AuthorizationCodeData, *url.URL, error)
+	RetrieveAccessToken(ctx context.Context, req *AccessTokenRequest) (*oauth2.Token, error)
+	RefreshToken(ctx context.Context, refreshToken string) (*oauth2.Token, error)
+	ValidateJWT(ctx context.Context, tokenString string) (*jwt.Token, error)
 }

@@ -37,14 +37,11 @@ func fetchJWKS(url string, skipTLSVerify bool) (*JWKS, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch JWKS: %w", err)
 	}
+	defer resp.Body.Close() //nolint:errcheck
 
-	defer func() {
-		if err := resp.Body.Close(); err != nil {
-			// Log the error but don't override the main function error
-			// In a real implementation, you might want to use structured logging here
-			fmt.Printf("Error closing response body: %v\n", err)
-		}
-	}()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("failed to fetch JWKS: HTTP %d from %s", resp.StatusCode, url)
+	}
 
 	var jwks JWKS
 	if err := json.NewDecoder(resp.Body).Decode(&jwks); err != nil {
@@ -88,9 +85,9 @@ func (j *JWK) RSAKey() (*rsa.PublicKey, error) {
 }
 
 func (jwks *JWKS) GetKeyByID(kid string) (*JWK, error) {
-	for _, key := range jwks.Keys {
-		if key.Kid == kid {
-			return &key, nil
+	for i := range jwks.Keys {
+		if jwks.Keys[i].Kid == kid {
+			return &jwks.Keys[i], nil
 		}
 	}
 	return nil, fmt.Errorf("key not found")

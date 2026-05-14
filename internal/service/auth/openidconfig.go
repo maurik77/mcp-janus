@@ -26,12 +26,11 @@ func fetchOpenIDConfiguration(url string, skipTLSVerify bool) (*OpenIDConfigurat
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch OpenID configuration: %w", err)
 	}
+	defer resp.Body.Close() //nolint:errcheck
 
-	defer func() {
-		if err := resp.Body.Close(); err != nil {
-			fmt.Printf("Error closing response body: %v\n", err)
-		}
-	}()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("failed to fetch OpenID configuration: HTTP %d from %s", resp.StatusCode, url)
+	}
 
 	var config OpenIDConfiguration
 	if err := json.NewDecoder(resp.Body).Decode(&config); err != nil {

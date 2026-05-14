@@ -101,7 +101,7 @@ func authHandler(authService auth.Service) gin.HandlerFunc {
 
 		metrics.RecordAuthRequest(c.Request.Context(), req.ClientID)
 
-		authURL, err := authService.AuthenticateRequest(req)
+		authURL, err := authService.AuthenticateRequest(c.Request.Context(), req)
 
 		if err != nil {
 			metrics.RecordAuthFailure(c.Request.Context(), req.ClientID, "authentication_failed")
@@ -117,6 +117,15 @@ func authHandler(authService auth.Service) gin.HandlerFunc {
 // callbackHandler: IdP → Proxy
 func callbackHandler(authService auth.Service) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// RFC 6749 §4.1.2.1: propagate IdP errors back to the client redirect URI
+		if idpErr := c.Query("error"); idpErr != "" {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error":             idpErr,
+				"error_description": c.Query("error_description"),
+			})
+			return
+		}
+
 		req := &auth.AuthorizationCodeData{}
 		err := c.BindQuery(req)
 
@@ -125,7 +134,7 @@ func callbackHandler(authService auth.Service) gin.HandlerFunc {
 			return
 		}
 
-		authData, redirectURL, err := authService.ManageAuthorizationCode(req)
+		authData, redirectURL, err := authService.ManageAuthorizationCode(c.Request.Context(), req)
 
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request"})
@@ -154,12 +163,12 @@ func tokenHandler(authHandler auth.Service) gin.HandlerFunc {
 		}
 
 		start := time.Now()
-		opaqueToken, err := authHandler.RetrieveAccessToken(req)
+		opaqueToken, err := authHandler.RetrieveAccessToken(c.Request.Context(), req)
 		duration := time.Since(start)
 
 		if err != nil {
 			metrics.RecordTokenExchange(c.Request.Context(), duration, false)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "server_error"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_grant"})
 			return
 		}
 
@@ -168,10 +177,37 @@ func tokenHandler(authHandler auth.Service) gin.HandlerFunc {
 	}
 }
 
-// refreshHandler
-func refreshHandler(_ auth.Service) gin.HandlerFunc {
+// refreshHandler: client → Proxy
+func refreshHandler(authHandler auth.Service) gin.HandlerFunc {
+	type refreshRequest struct {
+		RefreshToken string `json:"refresh_token" form:"refresh_token"`
+	}
+
 	return func(c *gin.Context) {
-		c.JSON(http.StatusNotImplemented, gin.H{"error": "not_implemented"})
+		metrics := c.Request.Context().Value(metricsKey).(*telemetry.Metrics)
+		req := &refreshRequest{}
+		if err := c.Bind(req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request"})
+			return
+		}
+
+		if req.RefreshToken == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request", "error_description": "refresh_token is required"})
+			return
+		}
+
+		start := time.Now()
+		opaqueToken, err := authHandler.RefreshToken(c.Request.Context(), req.RefreshToken)
+		duration := time.Since(start)
+
+		if err != nil {
+			metrics.RecordTokenExchange(c.Request.Context(), duration, false)
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_grant"})
+			return
+		}
+
+		metrics.RecordTokenExchange(c.Request.Context(), duration, true)
+		c.JSON(http.StatusOK, opaqueToken)
 	}
 }
 
@@ -185,7 +221,7 @@ func registerHandler(authHandler auth.Service) gin.HandlerFunc {
 			return
 		}
 
-		res, err := authHandler.RegisterClient(req)
+		res, err := authHandler.RegisterClient(c.Request.Context(), req)
 
 		if err != nil {
 			metrics.RecordClientRegistration(c.Request.Context(), false)
@@ -194,7 +230,7 @@ func registerHandler(authHandler auth.Service) gin.HandlerFunc {
 		}
 
 		metrics.RecordClientRegistration(c.Request.Context(), true)
-		c.JSON(http.StatusOK, res)
+		c.JSON(http.StatusCreated, res)
 	}
 }
 

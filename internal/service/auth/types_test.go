@@ -325,6 +325,188 @@ func TestClientIdData_RoundTrip(t *testing.T) {
 	}
 }
 
+func TestStateData_Encode(t *testing.T) {
+	tests := []struct {
+		name    string
+		data    *StateData
+		mockEnc utility.Encryption
+		wantErr bool
+	}{
+		{
+			name: "successful encoding",
+			data: &StateData{
+				OriginalState: "user-state-123",
+				RedirectURI:   "https://client.example.com/callback",
+				ClientID:      "encrypted-client-id",
+			},
+			mockEnc: &mockEncryption{},
+			wantErr: false,
+		},
+		{
+			name: "encryption fails",
+			data: &StateData{
+				OriginalState: "state",
+				RedirectURI:   "https://example.com/cb",
+				ClientID:      "cid",
+			},
+			mockEnc: &mockEncryption{
+				encryptFunc: func(data []byte) (string, error) {
+					return "", &mockEncryptionError{"encrypt failed"}
+				},
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := tt.data.Encode(tt.mockEnc)
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("Encode() expected error but got none")
+				}
+				return
+			}
+			if err != nil {
+				t.Errorf("Encode() unexpected error = %v", err)
+				return
+			}
+			if result == "" {
+				t.Errorf("Encode() returned empty string")
+			}
+		})
+	}
+}
+
+func TestDecodeStateData(t *testing.T) {
+	tests := []struct {
+		name      string
+		encrypted string
+		mockEnc   utility.Encryption
+		want      *StateData
+		wantErr   bool
+	}{
+		{
+			name: "successful decoding",
+			encrypted: func() string {
+				data := &StateData{
+					OriginalState: "user-state-abc",
+					RedirectURI:   "https://client.example.com/callback",
+					ClientID:      "enc-client-id",
+				}
+				dataJSON, _ := json.Marshal(data)
+				return "encrypted_" + string(dataJSON)
+			}(),
+			mockEnc: &mockEncryption{},
+			want: &StateData{
+				OriginalState: "user-state-abc",
+				RedirectURI:   "https://client.example.com/callback",
+				ClientID:      "enc-client-id",
+			},
+			wantErr: false,
+		},
+		{
+			name:      "decryption fails",
+			encrypted: "tampered-data",
+			mockEnc: &mockEncryption{
+				decryptFunc: func(enc string) ([]byte, error) {
+					return nil, &mockEncryptionError{"decryption failed"}
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name:      "invalid JSON after decryption",
+			encrypted: "encrypted_not-json{{{",
+			mockEnc:   &mockEncryption{},
+			wantErr:   true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := DecodeStateData(tt.encrypted, tt.mockEnc)
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("DecodeStateData() expected error but got none")
+				}
+				return
+			}
+			if err != nil {
+				t.Errorf("DecodeStateData() unexpected error = %v", err)
+				return
+			}
+			if result.OriginalState != tt.want.OriginalState {
+				t.Errorf("OriginalState = %v, want %v", result.OriginalState, tt.want.OriginalState)
+			}
+			if result.RedirectURI != tt.want.RedirectURI {
+				t.Errorf("RedirectURI = %v, want %v", result.RedirectURI, tt.want.RedirectURI)
+			}
+			if result.ClientID != tt.want.ClientID {
+				t.Errorf("ClientID = %v, want %v", result.ClientID, tt.want.ClientID)
+			}
+		})
+	}
+}
+
+func TestStateData_RoundTrip(t *testing.T) {
+	mockEnc := &mockEncryption{}
+
+	tests := []struct {
+		name string
+		data *StateData
+	}{
+		{
+			name: "basic round-trip",
+			data: &StateData{
+				OriginalState: "state-123",
+				RedirectURI:   "https://example.com/callback",
+				ClientID:      "enc-client-id-456",
+			},
+		},
+		{
+			name: "special characters",
+			data: &StateData{
+				OriginalState: "state=foo&bar=baz",
+				RedirectURI:   "https://example.com/callback?param=value&other=1",
+				ClientID:      "complex|client|id",
+			},
+		},
+		{
+			name: "empty original state",
+			data: &StateData{
+				OriginalState: "",
+				RedirectURI:   "https://example.com/cb",
+				ClientID:      "cid",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			encoded, err := tt.data.Encode(mockEnc)
+			if err != nil {
+				t.Fatalf("Encode() error = %v", err)
+			}
+
+			decoded, err := DecodeStateData(encoded, mockEnc)
+			if err != nil {
+				t.Fatalf("DecodeStateData() error = %v", err)
+			}
+
+			if decoded.OriginalState != tt.data.OriginalState {
+				t.Errorf("OriginalState mismatch: got %v, want %v", decoded.OriginalState, tt.data.OriginalState)
+			}
+			if decoded.RedirectURI != tt.data.RedirectURI {
+				t.Errorf("RedirectURI mismatch: got %v, want %v", decoded.RedirectURI, tt.data.RedirectURI)
+			}
+			if decoded.ClientID != tt.data.ClientID {
+				t.Errorf("ClientID mismatch: got %v, want %v", decoded.ClientID, tt.data.ClientID)
+			}
+		})
+	}
+}
+
 // mockEncryptionError is a custom error type for testing
 type mockEncryptionError struct {
 	msg string

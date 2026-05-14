@@ -1,399 +1,139 @@
-# MCP Janus Proxy Server
+# MCP Janus
 
-A secure **OAuth 2.1-compliant MCP (Model Context Protocol) Proxy Server** written in Go that sits between MCP clients and protected MCP servers, managing all communication with robust security controls.
+An OAuth 2.1 MCP proxy that encrypts IdP tokens into opaque AES-256-GCM bearers. Single Go binary, zero token passthrough.
 
-## 🏛️ Why Janus?
+## Why Janus?
 
-**Janus**, the ancient Roman god of doors, gates, transitions, and passages, stands eternal with two faces—one gazing into the past, the other into the future. Guardian of thresholds and beginnings, Janus watches over all that enters and exits, presiding over change and duality.
+The [MCP authorization specification](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization) requires that proxies **never forward tokens not issued for themselves**. Most MCP auth proxies pass through the IdP JWT as-is, violating this requirement and leaking identity provider details to clients.
 
-This proxy embodies the spirit of Janus:
+Janus solves this by encrypting every IdP JWT into an **opaque bearer token** using AES-256-GCM before handing it to the client. The client never sees, decodes, or replays the real token. On each request the proxy decrypts, validates the JWT, and forwards the real token upstream.
 
-- **🚪 Guardian of Gateways**: Like Janus at the threshold, this proxy stands watch between client and server, controlling passage with unwavering vigilance
-- **👁️ Two-Faced Vision**: One face validates incoming requests from clients, the other secures communication with upstream servers—seeing both worlds simultaneously
-- **🔄 Master of Transitions**: Transforms client tokens into secure credentials, mediating the passage between trust domains
-- **⚖️ Keeper of Boundaries**: Enforces the sacred boundary between public and protected realms, allowing only the worthy to pass
-- **🌅 Herald of New Beginnings**: Each request is a new beginning, each token a fresh start, managed with cryptographic ceremony
+**Result**: full MCP spec compliance, zero token leakage, and the upstream server receives a valid IdP JWT with no extra integration.
 
-Just as ancient Romans invoked Janus at the start of any endeavor, this proxy initiates every secure MCP connection, standing as the eternal sentinel at the gateway between worlds.
-
-## 🎯 Project Goal
-
-Implement a secure proxy that:
-
-- ✅ Issues **opaque bearer tokens** to MCP clients (not passthrough)
-- ✅ Implements **OAuth 2.0 / OAuth 2.1** flows with PKCE
-- ✅ Uses **AEAD encryption** (AES-256-GCM) for token security
-- ✅ Enforces **audience binding** and resource validation
-- ✅ Supports **key rotation** with KID-based management
-- ✅ Provides **structured logging** without exposing secrets
-
-## 📋 Features
+## Key Features
 
 ### Security
 
-- **No Token Passthrough**: Proxy issues its own opaque tokens, never forwards client tokens
-- **AEAD Encryption**: AES-256-GCM for opaque token encryption
-- **JWT Integration**: Decrypts opaque tokens to validate JWT claims
-- **Claims Mapping**: Configurable mapping of IdP claims to HTTP headers
-- **Dynamic Client Registration**: Encrypted client credentials with unique client IDs
-- **HTTPS Ready**: Production-ready with TLS support (HTTP for development)
+- **Opaque encrypted tokens** -- AES-256-GCM (AEAD) wraps every IdP JWT; clients only see ciphertext
+- **No token passthrough** -- proxy issues its own tokens, never forwards client tokens
+- **JWT validation** -- full claim validation (expiry, audience, issuer) with JWKS key fetching
+- **Claims-to-headers mapping** -- configurable IdP claim injection into upstream HTTP headers
+- **Encrypted client credentials** -- dynamic registration returns AEAD-encrypted `client_id` / `client_secret`
 
-### OAuth 2.1 Compliance
+### Standards Compliance
 
-- **Authorization Code + PKCE**: Full support for secure authorization flows
-- **Dynamic Client Registration**: RFC 7591 compliant client registration
-- **Protected Resource Metadata**: RFC 9728 compliance for resource discovery
-- **Token Exchange**: Secure token exchange with upstream IdP
-- **Refresh Token Support**: Token refresh endpoint implemented
+- **OAuth 2.1 + PKCE** -- authorization code flow with S256 code challenge
+- **RFC 7591** -- dynamic client registration
+- **RFC 9728** -- protected resource metadata for discovery
+- **OpenID Connect Discovery** -- `.well-known/openid-configuration` endpoint
 
-### Architecture
+### Operations
 
-- **Gin Framework**: High-performance HTTP router with middleware support
-- **Modular Services**: Separation of concerns with auth, metadata, and proxy services
-- **Configuration-Driven**: YAML-based configuration with environment variable overrides
-- **Testable**: Comprehensive test suite with mocks and table-driven tests
-- **Production-Ready**: Graceful shutdown, health checks, structured logging
-- **OpenTelemetry Integration**: Full observability with distributed tracing and metrics
+- **OpenTelemetry** -- distributed tracing and business metrics (auth, token exchange, proxy, upstream errors)
+- **Docker Compose** -- one-command proxy + observability stack (Jaeger, Prometheus, Grafana)
+- **Structured logging** -- JSON logs, configurable level, no secrets in output
+- **Graceful shutdown** -- clean connection draining on SIGTERM
+- **Single binary** -- `go build` produces one static binary, no runtime dependencies
 
-## 🏗️ Architecture
+## Architecture
 
-``` text
-┌─────────────┐
-│ MCP Client  │ ← Receives opaque bearer token
-└──────┬──────┘
-       │ Authorization: Bearer <opaque>
-       ▼
-┌─────────────────────────────────┐
-│     MCP Proxy Server (Go)       │
-│  ┌──────────────────────────┐   │
-│  │ Gin HTTP Router          │   │
-│  │ - Auth Service           │   │
-│  │ - Metadata Service       │   │
-│  │ - Encryption Utility     │   │
-│  │ - Config Management      │   │
-│  └──────────────────────────┘   │
-└──────┬─────────────┬────────────┘
-       │             │ Authorization: Bearer <upstream>
-       │             ▼
-       │    ┌─────────────────┐
-       │    │ Protected MCP   │
-       │    │ Server          │
-       │    └─────────────────┘
-       │
-       │ OAuth 2.1 flow
-       ▼
-┌──────────────────────┐
-│   Identity Provider  │
-│ (Authorization Svr)  │
-└──────────────────────┘
+```text
+MCP Client                        MCP Janus Proxy                    Upstream MCP Server
+    │                                    │                                    │
+    │  Authorization: Bearer <opaque>    │                                    │
+    │ ──────────────────────────────────>│                                    │
+    │                                    │ 1. Decrypt opaque token (AES-GCM)  │
+    │                                    │ 2. Validate JWT (exp, aud, iss)    │
+    │                                    │ 3. Map claims → HTTP headers       │
+    │                                    │                                    │
+    │                                    │  Authorization: Bearer <real JWT>  │
+    │                                    │  X-Sub: user123                    │
+    │                                    │ ──────────────────────────────────>│
+    │                                    │                                    │
+    │                                    │◄──────────────────────────────────│
+    │◄──────────────────────────────────│                                    │
+    │                                    │                                    │
+
+    OAuth 2.1 + PKCE flow (register → authorize → callback → token exchange)
+    is handled between the client and the proxy, coordinating with the IdP.
 ```
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Prerequisites
 
-- Go 1.21 or later
-- TLS certificates (for production)
+- Go 1.24+ (or download a [release binary](https://github.com))
+- An OAuth 2.1 / OpenID Connect identity provider
+- [Task](https://taskfile.dev/) runner (optional, for convenience commands)
 
-### Installation
+### Build and run
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/user/mcp-janus.git
 cd mcp-janus
-task install
-task build
-```
 
-### Configuration
+# Install dependencies
+go mod download
 
-Create a `config.yaml` file or set environment variables:
+# Build
+go build -o bin/mcpproxy ./cmd/proxy
 
-```yaml
-proxy:
-  base_url: http://localhost:8080
-  listen_addr: ":8080"
+# Set your IdP client secret (or put it in config.yaml)
+export MCP_IDP_CLIENT_SECRET="your-idp-client-secret"
 
-idp:
-  client_id: mcp-proxy-client
-  client_secret: your-secret-here
-  openid_configuration_url: https://auth.example.com/.well-known/openid-configuration
-  scopes: ["openid", "profile", "email"]
-  claims_mapping:
-    sub: X-Sub
-    name: X-Full-Name
-    email: X-Email
-  jwt_leeway: 10s
-
-encryption:
-  master_key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
-
-telemetry:
-  enabled: true
-  service_name: mcp-proxy
-  service_version: 1.0.0
-  otlp_endpoint: localhost:4318
-
-upstream:
-  name: my-mcp-server
-  resource: https://mcp.example.com
-  base_url: https://mcp.example.com
-  path_prefix: /mcp
-```
-
-Environment variable overrides:
-
-```bash
-export MCP_PROXY_BASE_URL="https://proxy.example.com"
-export MCP_IDP_CLIENT_SECRET="your-secret-here"
-```
-
-### Logging
-
-Logging is configurable via `proxy.log_level` and `proxy.log_format` in the config file.
-
-```yaml
-proxy:
-  log_level: info   # trace|debug|info|warn|error|fatal|panic
-  log_format: json  # json (text format may be added later)
-```
-
-Use `debug` or `trace` only in development, since request/response headers and bodies can be logged.
-
-### Running
-
-```bash
-# Development (HTTP) - using Task
-task run
-
-# Or run directly with go
-go run cmd/proxy/main.go
-
-# Production - build first
-task build
+# Run
 ./bin/mcpproxy
 ```
 
-### Health Check
+Or use Task shortcuts:
+
+```bash
+task install        # go mod download + verify
+task build          # build → ./bin/mcpproxy
+task run            # build + run (needs MCP_IDP_CLIENT_SECRET)
+```
+
+### Verify it's running
 
 ```bash
 curl http://localhost:8080/health
 # OK
+
+curl http://localhost:8080/.well-known/oauth-protected-resource | jq .
 ```
 
-## 🧪 Testing with the Test Server
+### Test server
 
-The project includes a test MCP server (`cmd/mcpserver`) that implements a fake weather tool, perfect for testing the proxy without needing real MCP servers.
-
-### Quick Test Setup
+The repo includes a fake MCP weather server for local testing:
 
 ```bash
-# Build both servers
-task build
-task build-testserver
-
-# Terminal 1: Start the test MCP server
-task run-testserver
-# Runs on http://localhost:8081
-
-# Terminal 2: Start the proxy (configure to point to localhost:8081)
-task run
-
-# Terminal 3: Run the test script
-task test-testserver
+task build-testserver   # build → ./bin/mcpserver
+task run-testserver     # runs on :8081
+task start-all          # proxy + test server together
 ```
 
-### Test Server Features
+See [docs/testing-guide.md](docs/testing-guide.md) for the full end-to-end test walkthrough.
 
-- **Fake Weather Tool**: Returns deterministic weather data for any city and date
-- **MCP Protocol**: Implements `tools/list`, `tools/call`, and `initialize` methods
-- **No Dependencies**: Runs standalone for easy testing
+## How It Works
 
-See [Testing Guide](docs/testing-guide.md) and [Test Server README](cmd/mcpserver/README.md) for details.
+### Opaque token flow
 
-## 📊 Observability
+1. **Register** -- client calls `POST /register` with redirect URIs. Proxy returns an AEAD-encrypted `client_id` and `client_secret`.
+2. **Authorize** -- client redirects to `GET /auth` with PKCE `code_challenge`. Proxy redirects to the IdP.
+3. **Callback** -- IdP redirects back to `GET /callback`. Proxy receives the authorization code from the IdP.
+4. **Token exchange** -- client calls `POST /token` with `code_verifier`. Proxy exchanges the code with the IdP, receives a real JWT, encrypts it with AES-256-GCM, and returns the opaque bearer to the client.
+5. **Authenticated requests** -- client sends `Authorization: Bearer <opaque>` to `GET/POST /mcp/*`. Proxy decrypts, validates the JWT, maps claims to headers, and forwards with the real token.
+6. **Refresh** -- client calls `POST /refresh` with the encrypted refresh token. Proxy decrypts, refreshes with the IdP, re-encrypts, and returns a new opaque bearer.
 
-The MCP Proxy includes comprehensive **OpenTelemetry** integration for distributed tracing and metrics.
+### Token encryption detail
 
-### Quick Start with Observability
+- **Algorithm**: AES-256-GCM (AEAD -- authenticated encryption with associated data)
+- **Process**: real JWT → encrypt with 256-bit master key → random nonce per operation → base64url encode → opaque token string
+- **Decryption**: extract bearer → base64url decode → decrypt with master key → parse JWT → validate claims
 
-```bash
-# Start observability stack (Jaeger, Prometheus, Grafana, OpenTelemetry Collector)
-docker-compose -f docker-compose.observability.yaml up -d
+### Claims mapping
 
-# Start the proxy with telemetry enabled (default)
-task run
-
-# Access observability tools
-open http://localhost:16686  # Jaeger - Distributed Traces
-open http://localhost:9090   # Prometheus - Metrics
-open http://localhost:3000   # Grafana - Dashboards (admin/admin)
-```
-
-### What's Instrumented
-
-- **Distributed Tracing**: Automatic HTTP tracing via `otelgin` middleware + custom spans for auth flows, token operations, and proxy forwarding
-- **Business Metrics**: Counters and histograms for authentication, token exchange, proxy requests, and upstream calls
-- **Context Propagation**: W3C Trace Context for end-to-end tracing
-
-### Key Metrics
-
-- `mcp.proxy.auth.requests.total` - Authentication requests
-- `mcp.proxy.token.exchange.duration` - Token exchange latency
-- `mcp.proxy.requests.total` - Proxy requests by method/path/status
-- `mcp.proxy.upstream.errors.total` - Upstream errors
-
-### Telemetry Configuration
-
-```yaml
-telemetry:
-  enabled: true                    # Enable/disable OpenTelemetry
-  service_name: mcp-proxy          # Service name for traces/metrics
-  service_version: 1.0.0           # Service version
-  otlp_endpoint: localhost:4318    # OTLP HTTP endpoint
-```
-
-Environment variables: `MCP_TELEMETRY_ENABLED`, `MCP_TELEMETRY_OTLP_ENDPOINT`
-
-See [OpenTelemetry Documentation](docs/opentelemetry.md) for detailed configuration and usage.
-
-## 📖 API Endpoints
-
-### Discovery Endpoints
-
-#### Protected Resource Metadata (RFC 9728)
-
-```http
-GET /.well-known/oauth-protected-resource
-```
-
-Returns proxy resource metadata with authorization server information.
-
-#### OpenID Configuration
-
-```http
-GET /.well-known/openid-configuration
-```
-
-Returns OpenID Connect discovery document.
-
-### Dynamic Client Registration
-
-```http
-POST /register
-Content-Type: application/json
-
-{
-  "client_name": "My MCP Client",
-  "redirect_uris": ["http://localhost:3000/callback"],
-  "grant_types": ["authorization_code", "refresh_token"],
-  "response_types": ["code"]
-}
-```
-
-Response: Encrypted client credentials with `client_id` and `client_secret`.
-
-### OAuth Authorization Flow
-
-#### Authorization Endpoint
-
-```http
-GET /auth?response_type=code&client_id=<encrypted_id>&redirect_uri=<uri>&state=<state>&code_challenge=<challenge>&code_challenge_method=S256
-```
-
-Initiates OAuth authorization with upstream IdP.
-
-#### Callback Endpoint
-
-```http
-GET /callback?code=<auth_code>&state=<state>
-```
-
-Handles OAuth callback from upstream IdP and returns encrypted authorization code to client.
-
-#### Token Endpoint
-
-```http
-POST /token
-Content-Type: application/x-www-form-urlencoded
-
-grant_type=authorization_code&code=<encrypted_code>&redirect_uri=<uri>&client_id=<encrypted_id>&client_secret=<secret>&code_verifier=<verifier>
-```
-
-Response:
-
-```json
-{
-  "access_token": "<opaque_encrypted_token>",
-  "token_type": "Bearer",
-  "expires_in": 3600,
-  "refresh_token": "<encrypted_refresh_token>",
-  "scope": "openid profile email"
-}
-```
-
-#### Refresh Token Endpoint
-
-```http
-POST /refresh
-Content-Type: application/x-www-form-urlencoded
-
-grant_type=refresh_token&refresh_token=<encrypted_refresh_token>&client_id=<encrypted_id>&client_secret=<secret>
-```
-
-**Note: Currently returns 501 Not Implemented.** The endpoint exists and is routed, but the refresh token logic is not yet implemented. The `RefreshToken` method in the auth service returns an empty token.
-
-### MCP Proxy
-
-```http
-GET /mcp/*
-Authorization: Bearer <opaque_encrypted_token>
-```
-
-Forwards authenticated requests to upstream MCP server with decrypted real token.
-
-## 🔐 Security Model
-
-### Opaque Token Flow
-
-1. **Client Registration**: Client registers and receives encrypted `client_id` containing redirect URIs and a generated secret
-2. **Authorization**: Client initiates OAuth flow, proxy coordinates with upstream IdP
-3. **Token Exchange**: Proxy exchanges authorization code with IdP, receives JWT tokens
-4. **Encryption**: Proxy encrypts JWT tokens using AES-256-GCM
-5. **Opaque Token**: Client receives encrypted token (opaque to client, contains real JWT)
-6. **Request Forwarding**: Proxy decrypts token, validates JWT, injects upstream token into forwarded requests
-
-### Encrypted Client ID Structure
-
-The `client_id` returned during registration is an encrypted payload containing:
-
-- Redirect URIs
-- Generated client secret
-- Registration metadata
-
-This ensures client credentials are secured and tamper-proof.
-
-### Token Encryption
-
-**Encryption Method**: AES-256-GCM (AEAD)
-
-**Process**:
-
-1. Real JWT token from IdP encrypted with master key
-2. Nonce generated for each encryption operation
-3. Ciphertext + nonce encoded as base64url
-4. Client receives opaque token string
-
-**Decryption & Validation**:
-
-1. Extract bearer token from `Authorization` header
-2. Decrypt using master key
-3. Parse and validate JWT claims
-4. Map claims to HTTP headers per configuration
-5. Forward request with real token
-
-### Claims Mapping
-
-The proxy supports mapping IdP JWT claims to HTTP headers for upstream consumption:
+IdP JWT claims are mapped to HTTP headers on upstream requests:
 
 ```yaml
 idp:
@@ -404,171 +144,133 @@ idp:
     upn: X-UPN
 ```
 
-### Key Security Principles
+The upstream server receives these headers without needing to understand JWT or talk to the IdP.
 
-1. **No Token Passthrough**: Client never sees or uses real IdP tokens
-2. **Encrypted Storage**: All sensitive tokens encrypted at rest and in transit
-3. **JWT Validation**: Full JWT validation before forwarding requests
-4. **Configurable Claims**: Flexible claim-to-header mapping
-5. **HTTPS Ready**: Production deployment should use TLS
-6. **Master Key Security**: Store master key securely (environment variables, secrets manager)
+For detailed architecture documentation see [docs/design.md](docs/design.md) and [docs/auth-flow.md](docs/auth-flow.md).
 
-## 🧪 Testing
+## Configuration
 
-### Run All Tests
+Create a `config.yaml` in the working directory (or set `MCP_`-prefixed environment variables):
+
+```yaml
+proxy:
+  base_url: http://localhost:8080        # Canonical URL of this proxy
+  listen_addr: ":8080"                   # Listen address
+  log_level: info                        # trace|debug|info|warn|error|fatal|panic
+  log_format: json                       # json
+
+idp:
+  client_id: your-idp-client-id         # OAuth client ID at the IdP
+  client_secret: ""                      # OAuth client secret (use MCP_IDP_CLIENT_SECRET env var)
+  openid_configuration_url: https://auth.example.com/.well-known/openid-configuration
+  scopes:
+    - openid
+    - profile
+    - email
+  claims_mapping:                        # IdP JWT claim → upstream HTTP header
+    sub: X-Sub
+    name: X-Full-Name
+    email: X-Email
+  jwt_leeway: 10s                        # Clock skew tolerance for JWT validation
+
+encryption:
+  # 256-bit hex key. Generate with: openssl rand -hex 32
+  master_key: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+upstream:
+  name: my-mcp-server                   # Upstream display name
+  resource: https://mcp.example.com     # Resource identifier for audience binding
+  base_url: https://mcp.example.com     # Upstream base URL
+  path_prefix: /mcp                     # Path prefix for proxied requests
+
+telemetry:
+  enabled: true                          # Enable OpenTelemetry
+  service_name: mcp-proxy                # Service name in traces/metrics
+  service_version: 1.0.0
+  otlp_endpoint: localhost:4318          # OTLP HTTP endpoint
+```
+
+Environment variable overrides use the `MCP_` prefix with underscores for nesting:
 
 ```bash
-task test
-# or
-go test ./... -v
+export MCP_IDP_CLIENT_SECRET="your-secret"
+export MCP_PROXY_BASE_URL="https://proxy.example.com"
+export MCP_ENCRYPTION_MASTER_KEY="$(openssl rand -hex 32)"
 ```
 
-### Run Tests with Coverage
+See [.env.example](.env.example) for all supported variables.
+
+## API Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/.well-known/openid-configuration` | OpenID Connect discovery |
+| `GET` | `/.well-known/oauth-protected-resource` | Protected resource metadata (RFC 9728) |
+| `POST` | `/register` | Dynamic client registration (RFC 7591) |
+| `GET` | `/auth` | OAuth authorization initiation (with PKCE) |
+| `GET` | `/callback` | OAuth callback from IdP |
+| `POST` | `/token` | Token exchange (auth code → opaque bearer) |
+| `POST` | `/refresh` | Refresh token exchange |
+| `GET/POST` | `/mcp/*` | Authenticated MCP proxy to upstream |
+| `GET` | `/health` | Health check (returns `OK`) |
+
+### Example: register a client
 
 ```bash
-task coverage
-# Opens HTML coverage report in browser
+curl -s -X POST http://localhost:8080/register \
+  -H "Content-Type: application/json" \
+  -d '{
+    "client_name": "My MCP Client",
+    "redirect_uris": ["http://localhost:3000/callback"],
+    "grant_types": ["authorization_code", "refresh_token"],
+    "response_types": ["code"]
+  }' | jq .
 ```
 
-### Run Specific Package Tests
+See [docs/testing-guide.md](docs/testing-guide.md) for the full curl sequence (register → auth → token → proxy call).
+
+## Observability
+
+Start the full observability stack:
 
 ```bash
-go test ./internal/service/auth/... -v
-go test ./internal/utility/... -v
-go test ./internal/infrastructure/wire/... -v
+docker-compose -f docker-compose.observability.yaml up -d
 ```
 
-### Integration Testing with Test Server
+This launches Jaeger (traces), Prometheus (metrics), Grafana (dashboards), and the OpenTelemetry Collector. The proxy exports traces and metrics automatically when `telemetry.enabled: true`.
 
-The project includes a test MCP server for end-to-end testing:
+Key metrics:
+
+- `mcp.proxy.auth.requests.total` -- authentication requests by result
+- `mcp.proxy.token.exchange.duration` -- token exchange latency histogram
+- `mcp.proxy.requests.total` -- proxy requests by method/path/status
+- `mcp.proxy.upstream.errors.total` -- upstream error counter
+
+See [docs/opentelemetry.md](docs/opentelemetry.md) for configuration details, custom spans, and dashboard setup.
+
+## Docker
 
 ```bash
-# Terminal 1: Start test MCP server
-task run-testserver
+# Proxy + test server
+docker-compose up -d
 
-# Terminal 2: Start proxy
-task run
+# Full observability stack (Jaeger, Prometheus, Grafana, OTel Collector)
+docker-compose -f docker-compose.observability.yaml up -d
 
-# Terminal 3: Run integration tests
-task test-testserver
+# Both together
+docker-compose -f docker-compose.yaml -f docker-compose.observability.yaml up -d
 ```
 
-See [Testing Guide](docs/testing-guide.md) for detailed testing documentation.
+## Contributing
 
-## 📁 Project Structure
+1. Fork the repo and create a feature branch
+2. Run `task fmt` before committing
+3. Add tests for new functionality (table-driven preferred)
+4. Ensure `task test` passes
+5. Ensure `task lint` passes (if golangci-lint is installed)
+6. Open a pull request with a clear description
 
-```text
-mcp-janus/
-├── cmd/
-│   ├── proxy/
-│   │   └── main.go              # Proxy server entry point
-│   └── mcpserver/
-│       └── main.go              # Test MCP server
-├── internal/
-│   ├── infrastructure/
-│   │   ├── config/
-│   │   │   └── config.go        # YAML-based configuration
-│   │   └── wire/
-│   │       └── gin.go           # Gin router setup & handlers
-│   ├── server/
-│   │   └── proxy.go             # Auth middleware & proxy logic
-│   ├── service/
-│   │   ├── auth/
-│   │   │   ├── service.go       # Auth service interface
-│   │   │   ├── impl.go          # Auth implementation
-│   │   │   └── types.go         # Auth request/response types
-│   │   └── metadata/
-│   │       └── metadata.go      # RFC 9728 & OpenID metadata
-│   └── utility/
-│       └── encryption.go        # AES-GCM encryption service
-├── docs/
-│   ├── mcp-auth-notes.md        # MCP spec summary
-│   ├── design.md                # Architecture documentation
-│   ├── auth-flow.md             # Flow diagrams
-│   └── testing-guide.md         # Testing documentation
-├── config.yaml                  # Configuration file
-├── Taskfile.yaml                # Task runner commands
-├── go.mod
-├── go.sum
-└── README.md                    # This file
-```
-
-## 🔧 Development
-
-### Code Style
-
-This project follows idiomatic Go conventions:
-
-- `gofmt` for formatting
-- `golangci-lint` for linting (when available)
-- Table-driven tests
-- Structured error handling
-- Clear separation of concerns
-
-### Available Task Commands
-
-View all available commands:
-
-```bash
-task --list
-```
-
-Key commands:
-
-- `task build` - Build the proxy server
-- `task run` - Run the proxy in development mode
-- `task test` - Run all tests
-- `task coverage` - Generate coverage report
-- `task lint` - Run linter (if golangci-lint installed)
-- `task fmt` - Format code
-- `task build-testserver` - Build test MCP server
-- `task run-testserver` - Run test MCP server
-- `task start-all` - Start both proxy and test server
-- `task build-all` - Build for multiple platforms
-
-### Adding New Features
-
-1. Update configuration in `internal/infrastructure/config/config.go`
-2. Define service interfaces in `internal/service/*/service.go`
-3. Implement services in `internal/service/*/impl.go`
-4. Wire services in `internal/infrastructure/wire/gin.go`
-5. Add comprehensive tests with table-driven patterns
-6. Update documentation
-
-### Encryption Key Management
-
-Generate a new master key:
-
-```bash
-# Generate 32-byte (256-bit) hex key
-openssl rand -hex 32
-```
-
-Configure in `config.yaml` or via environment variable `MCP_ENCRYPTION_MASTER_KEY`.
-
-## 🛡️ Threat Model
-
-### Protected Against
-
-- ✅ Token passthrough attacks (proxy issues its own tokens)
-- ✅ Token tampering (AEAD encryption with authentication)
-- ✅ Unauthorized access (OAuth 2.1 with PKCE)
-- ✅ Credential exposure (encrypted client IDs and tokens)
-- ✅ Man-in-the-middle (HTTPS support for production)
-- ✅ Token replay (JWT expiration validation)
-
-### Security Best Practices
-
-- Store master encryption key securely (secrets manager, environment variables)
-- Use HTTPS in production
-- Rotate encryption keys periodically
-- Monitor and log authentication events
-- Keep IdP credentials secure
-- Regular security audits of dependencies
-
-See documentation in `docs/` for detailed security information.
-
-## 📚 References
+## References
 
 ### MCP Specifications
 
@@ -578,46 +280,15 @@ See documentation in `docs/` for detailed security information.
 ### OAuth Standards
 
 - [OAuth 2.1 (IETF Draft)](https://datatracker.ietf.org/doc/html/draft-ietf-oauth-v2-1-13)
-- [RFC 8414: OAuth 2.0 Authorization Server Metadata](https://datatracker.ietf.org/doc/html/rfc8414)
-- [RFC 7591: OAuth 2.0 Dynamic Client Registration](https://datatracker.ietf.org/doc/html/rfc7591)
-- [RFC 9728: OAuth 2.0 Protected Resource Metadata](https://datatracker.ietf.org/doc/html/rfc9728)
-- [RFC 8707: Resource Indicators for OAuth 2.0](https://datatracker.ietf.org/doc/html/rfc8707)
+- [RFC 7591: Dynamic Client Registration](https://datatracker.ietf.org/doc/html/rfc7591)
+- [RFC 8414: Authorization Server Metadata](https://datatracker.ietf.org/doc/html/rfc8414)
+- [RFC 9728: Protected Resource Metadata](https://datatracker.ietf.org/doc/html/rfc9728)
+- [RFC 8707: Resource Indicators](https://datatracker.ietf.org/doc/html/rfc8707)
 
-## 🤝 Contributing
+### Project Documentation
 
-1. Follow Go best practices and project conventions
-2. Use `task fmt` to format code before committing
-3. Add tests for all new functionality
-4. Update documentation as needed
-5. Ensure all tests pass: `task test`
-
-## 🙋 Support
-
-For issues and questions:
-
-- Check [docs/](./docs/) for detailed documentation
-- Review [Testing Guide](docs/testing-guide.md) for testing help
-- Open an issue for bugs or feature requests
-
-## ✅ Implementation Status
-
-- [x] Go module initialized
-- [x] YAML-based configuration with environment overrides
-- [x] AEAD encryption (AES-256-GCM)
-- [x] Opaque token generation with JWT encryption
-- [x] Dynamic client registration with encrypted credentials
-- [x] OAuth authorization code flow with PKCE
-- [x] Token exchange and validation
-- [x] MCP request forwarding with auth middleware
-- [x] Claims mapping to HTTP headers
-- [x] Gin-based HTTP server with graceful shutdown
-- [x] Comprehensive test suite
-- [x] Documentation (README, design docs, flow diagrams)
-- [x] Task runner for common operations
-- [x] Test MCP server for integration testing
-- [x] OpenTelemetry integration (distributed tracing and metrics)
-- [x] Observability stack (Jaeger, Prometheus, Grafana, OpenTelemetry Collector)
-- [x] Refresh token endpoint (returns 501 Not Implemented)
-- [ ] Refresh token implementation (service logic)
-- [ ] Rate limiting
-- [ ] OpenAPI specification
+- [Architecture & Design](docs/design.md)
+- [Auth Flow Diagrams](docs/auth-flow.md)
+- [Testing Guide](docs/testing-guide.md)
+- [OpenTelemetry Setup](docs/opentelemetry.md)
+- [MCP Auth Spec Notes](docs/mcp-auth-notes.md)

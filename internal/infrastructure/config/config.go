@@ -3,6 +3,7 @@ package config
 
 import (
 	"encoding/hex"
+	"fmt"
 	"os"
 	"time"
 
@@ -17,13 +18,15 @@ type Upstream struct {
 }
 
 type IDP struct {
-	ClientID                       string            `mapstructure:"client_id"`
-	ClientSecret                   string            `mapstructure:"client_secret"`
-	OpenIDConfigurationURL         string            `mapstructure:"openid_configuration_url"`
-	Scopes                         []string          `mapstructure:"scopes"`
-	ClaimsMapping                  map[string]string `mapstructure:"claims_mapping"`
-	JWTLeeway                      time.Duration     `mapstructure:"jwt_leeway"`
-	SkipTLSVerify                  bool              `mapstructure:"skip_tls_verify"`
+	ClientID               string            `mapstructure:"client_id"`
+	ClientSecret           string            `mapstructure:"client_secret"`
+	OpenIDConfigurationURL string            `mapstructure:"openid_configuration_url"`
+	Scopes                 []string          `mapstructure:"scopes"`
+	ClaimsMapping          map[string]string `mapstructure:"claims_mapping"`
+	JWTLeeway              time.Duration     `mapstructure:"jwt_leeway"`
+	SkipTLSVerify          bool              `mapstructure:"skip_tls_verify"`
+	FetchRetryAttempts     int               `mapstructure:"fetch_retry_attempts"`
+	FetchRetryDelay        time.Duration     `mapstructure:"fetch_retry_delay"`
 }
 
 type Proxy struct {
@@ -54,16 +57,24 @@ type Config struct {
 	Telemetry Telemetry `mapstructure:"telemetry"`
 }
 
-func (c *Config) EncryptionKey() [32]byte {
+func (c *Config) EncryptionKey() ([32]byte, error) {
 	var encKey [32]byte
 
 	if c == nil || c.Encryption.MasterKey == "" {
-		return encKey
+		return encKey, fmt.Errorf("encryption master_key is not configured")
 	}
 
-	keyBytes, _ := hex.DecodeString(c.Encryption.MasterKey)
+	keyBytes, err := hex.DecodeString(c.Encryption.MasterKey)
+	if err != nil {
+		return encKey, fmt.Errorf("encryption master_key is not valid hex: %w", err)
+	}
+
+	if len(keyBytes) != 32 {
+		return encKey, fmt.Errorf("encryption master_key must be exactly 32 bytes (64 hex chars), got %d bytes", len(keyBytes))
+	}
+
 	copy(encKey[:], keyBytes)
-	return encKey
+	return encKey, nil
 }
 
 func Load() (*Config, error) {
@@ -135,6 +146,13 @@ func Load() (*Config, error) {
 	viper.SetDefault("proxy.log_level", "error")
 	viper.SetDefault("proxy.log_format", "json")
 	viper.SetDefault("idp.skip_tls_verify", false)
+
+	viper.SetDefault("idp.fetch_retry_attempts", 3)
+	viper.SetDefault("idp.fetch_retry_delay", "2s")
+
+	if err := viper.ReadInConfig(); err != nil {
+		return nil, err
+	}
 
 	var cfg Config
 	if err := viper.Unmarshal(&cfg); err != nil {

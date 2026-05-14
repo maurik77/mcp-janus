@@ -6,6 +6,7 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"encoding/base64"
+	"fmt"
 	"io"
 	"mcpproxy/internal/infrastructure/config"
 )
@@ -22,7 +23,10 @@ type encryption struct {
 }
 
 func NewEncryption(cfg *config.Config) (Encryption, error) {
-	key := cfg.EncryptionKey()
+	key, err := cfg.EncryptionKey()
+	if err != nil {
+		return nil, fmt.Errorf("invalid encryption key: %w", err)
+	}
 	block, err := aes.NewCipher(key[:])
 	if err != nil {
 		return nil, err
@@ -54,6 +58,9 @@ func (e *encryption) Decrypt(enc string) ([]byte, error) {
 		return nil, err
 	}
 	nonceSize := e.gcm.NonceSize()
+	if len(data) < nonceSize {
+		return nil, fmt.Errorf("ciphertext too short")
+	}
 	nonce, cipherText := data[:nonceSize], data[nonceSize:]
 	return e.gcm.Open(nil, nonce, cipherText, nil)
 }

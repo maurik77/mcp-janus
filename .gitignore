@@ -84,3 +84,5 @@ $RECYCLE.BIN/
 *.bak
 *.backup
 *.exe*
+CLAUDE.md
+deployment/
