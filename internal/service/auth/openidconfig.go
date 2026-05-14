@@ -1,7 +1,6 @@
 package auth
 
 import (
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -15,12 +14,7 @@ type OpenIDConfiguration struct {
 }
 
 func fetchOpenIDConfiguration(url string, skipTLSVerify bool) (*OpenIDConfiguration, error) {
-	client := &http.Client{}
-	if skipTLSVerify {
-		client.Transport = &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec
-		}
-	}
+	client := newHTTPClient(skipTLSVerify)
 
 	resp, err := client.Get(url)
 	if err != nil {

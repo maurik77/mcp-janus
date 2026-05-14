@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"mcpproxy/internal/infrastructure/config"
 	"mcpproxy/internal/utility"
+	"net/http"
 	"net/url"
 	"slices"
 	"sync"
@@ -28,6 +29,7 @@ type ProxyAuthHandler struct {
 	jwks                *JWKS
 	jwksMu              sync.RWMutex
 	tracer              trace.Tracer
+	httpClient          *http.Client
 }
 
 // withRetry calls fn up to attempts times, waiting delay between failures.
@@ -94,6 +96,7 @@ func New(cfg config.Config, encryption utility.Encryption) (Service, error) {
 		openidConfiguration: openidConfiguration,
 		jwks:                jwks,
 		tracer:              otel.Tracer("mcp-proxy.auth"),
+		httpClient:          newHTTPClient(cfg.IDP.SkipTLSVerify),
 	}
 	utility.Logger.Info().
 		Str("issuer", openidConfiguration.Issuer).
@@ -287,8 +290,13 @@ func (s *ProxyAuthHandler) RetrieveAccessToken(ctx context.Context, req *AccessT
 	}
 
 	// Exchange with real IdP
+	httpClient := s.httpClient
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+	oauthCtx := context.WithValue(ctx, oauth2.HTTPClient, httpClient)
 	token, err := s.oauthConfig.Exchange(
-		ctx,
+		oauthCtx,
 		req.Code,
 		oauth2.SetAuthURLParam("grant_type", req.GrantTypes),
 		oauth2.SetAuthURLParam("code_verifier", req.CodeVerifier),
@@ -358,7 +366,12 @@ func (s *ProxyAuthHandler) RefreshToken(ctx context.Context, refreshToken string
 		return nil, fmt.Errorf("invalid_request")
 	}
 
-	tokenSource := s.oauthConfig.TokenSource(ctx, &oauth2.Token{
+	httpClient := s.httpClient
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+	oauthCtx := context.WithValue(ctx, oauth2.HTTPClient, httpClient)
+	tokenSource := s.oauthConfig.TokenSource(oauthCtx, &oauth2.Token{
 		RefreshToken: refreshTokenValue,
 	})
 

@@ -2,7 +2,6 @@ package auth
 
 import (
 	"crypto/rsa"
-	"crypto/tls"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
@@ -26,12 +25,7 @@ type JWK struct {
 }
 
 func fetchJWKS(url string, skipTLSVerify bool) (*JWKS, error) {
-	client := &http.Client{}
-	if skipTLSVerify {
-		client.Transport = &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec
-		}
-	}
+	client := newHTTPClient(skipTLSVerify)
 
 	resp, err := client.Get(url)
 	if err != nil {
