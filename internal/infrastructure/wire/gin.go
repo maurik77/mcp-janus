@@ -242,7 +242,7 @@ func registerHandler(authHandler auth.Service) gin.HandlerFunc {
 			return
 		}
 
-		utility.Logger.Info().Int("redirect_uris", len(req.RedirectURIs)).Msg("register: client registration requested")
+		utility.Logger.Info().Any("register_request", req).Msg("register: client registration requested")
 
 		res, err := authHandler.RegisterClient(c.Request.Context(), req)
 

@@ -7,6 +7,7 @@ metadata:
 data:
   config.yaml: |
     proxy:
+      issuer: {{ .Values.proxy.issuer | quote }}
       base_url: {{ .Values.proxy.baseUrl | quote }}
       listen_addr: {{ .Values.proxy.listenAddr | quote }}
       probe_addr: {{ .Values.proxy.probeAddr | quote }}

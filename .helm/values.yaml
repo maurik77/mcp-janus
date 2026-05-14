@@ -16,6 +16,7 @@ service:
   port: 8080
 
 proxy:
+  issuer: "http://mcp-janus:8080"
   # Externally reachable base URL of this proxy, used in OAuth redirect URIs.
   baseUrl: "http://mcp-janus:8080"
   # Address and port the proxy HTTP server binds to inside the container.

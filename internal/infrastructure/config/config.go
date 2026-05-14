@@ -31,6 +31,7 @@ type IDP struct {
 }
 
 type Proxy struct {
+	Issuer      string `mapstructure:"issuer"`
 	BaseURL     string `mapstructure:"base_url"`
 	ListenAddr  string `mapstructure:"listen_addr"`
 	ProbeAddr   string `mapstructure:"probe_addr"`
