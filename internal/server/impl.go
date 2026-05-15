@@ -150,7 +150,7 @@ func (p *proxy) AuthMiddleware() func(http.Handler) http.Handler {
 			for source, dest := range p.cfg.IDP.ClaimsMapping {
 				if value, exists := claims[source]; exists {
 					if strValue, ok := value.(string); ok {
-						r.Header.Add(dest, strValue)
+						r.Header.Set(dest, strValue)
 					}
 				}
 			}

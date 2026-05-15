@@ -58,6 +58,7 @@ func NewGinEngine(config *config.Config,
 
 	// Discovery
 	r.GET("/.well-known/openid-configuration", ginMetadataHandler(metadataService.OpenIDConfiguration))
+	r.GET("/.well-known/oauth-authorization-server", ginMetadataHandler(metadataService.AuthorizationServerMetadata))
 	r.GET("/.well-known/oauth-protected-resource", ginMetadataHandler(metadataService.ProtectedResourceMetadata))
 
 	// Dynamic Client Registration

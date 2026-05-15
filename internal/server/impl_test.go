@@ -27,6 +27,11 @@ func (m *mockMetadataService) OpenIDConfiguration() any {
 	return args.Get(0)
 }
 
+func (m *mockMetadataService) AuthorizationServerMetadata() any {
+	args := m.Called()
+	return args.Get(0)
+}
+
 func (m *mockMetadataService) ProtectedResourceMetadata() any {
 	args := m.Called()
 	return args.Get(0)
