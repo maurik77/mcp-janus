@@ -2,6 +2,7 @@ package metadata
 
 import (
 	"mcpproxy/internal/infrastructure/config"
+	"strings"
 )
 
 type MetadataHandler struct {
@@ -56,9 +57,8 @@ func (h *MetadataHandler) AuthorizationServerMetadata() any {
 // ProtectedResourceMetadataHandler serves /.well-known/oauth-protected-resource (RFC 9728)
 func (h *MetadataHandler) ProtectedResourceMetadata() any {
 	data := map[string]any{
-		"authorization_servers":         []string{h.issuer},
-		"resource":                      h.config.Proxy.BaseURL,
-		"resource_indicators_supported": true,
+		"authorization_servers": []string{h.issuer},
+		"resource":              h.config.Proxy.BaseURL,
 	}
 
 	return data
@@ -66,5 +66,9 @@ func (h *MetadataHandler) ProtectedResourceMetadata() any {
 
 // WWWAuthenticateHeader returns the 401 header value
 func (h *MetadataHandler) WWWAuthenticateHeader() string {
-	return `Bearer realm="mcp", resource_metadata="` + h.config.Proxy.BaseURL + `/.well-known/oauth-protected-resource"`
+	header := `Bearer realm="mcp", resource_metadata="` + h.config.Proxy.BaseURL + `/.well-known/oauth-protected-resource"`
+	if len(h.config.IDP.Scopes) > 0 {
+		header += `, scope="` + strings.Join(h.config.IDP.Scopes, " ") + `"`
+	}
+	return header
 }
