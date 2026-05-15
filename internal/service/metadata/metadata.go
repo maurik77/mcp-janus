@@ -33,7 +33,8 @@ func (h *MetadataHandler) OpenIDConfiguration() any {
 		"grant_types_supported":                 []string{"authorization_code", "refresh_token"},
 		"code_challenge_methods_supported":      []string{"S256"},
 		"scopes_supported":                      []string{"openid", "mcp"},
-		"token_endpoint_auth_methods_supported": []string{"none"},
+		"token_endpoint_auth_methods_supported":  []string{"none"},
+		"client_id_metadata_document_supported":  true,
 	}
 
 	return data
@@ -51,6 +52,7 @@ func (h *MetadataHandler) AuthorizationServerMetadata() any {
 		"code_challenge_methods_supported":      []string{"S256"},
 		"scopes_supported":                      []string{"mcp"},
 		"token_endpoint_auth_methods_supported": []string{"none"},
+		"client_id_metadata_document_supported": true,
 	}
 }
 

@@ -28,8 +28,10 @@ type ProxyAuthHandler struct {
 	openidConfiguration *OpenIDConfiguration
 	jwks                *JWKS
 	jwksMu              sync.RWMutex
-	tracer              trace.Tracer
-	httpClient          *http.Client
+	tracer       trace.Tracer
+	httpClient   *http.Client
+	cimdCache    *cimdCache
+	cimdFetcher  func(url string, client *http.Client, cache *cimdCache) (*ClientMetadataDocument, error)
 }
 
 // withRetry calls fn up to attempts times, waiting delay between failures.
@@ -96,7 +98,9 @@ func New(cfg config.Config, encryption utility.Encryption) (Service, error) {
 		openidConfiguration: openidConfiguration,
 		jwks:                jwks,
 		tracer:              otel.Tracer("mcp-proxy.auth"),
-		httpClient:          newHTTPClient(cfg.IDP.SkipTLSVerify),
+		httpClient:  newHTTPClient(cfg.IDP.SkipTLSVerify),
+		cimdCache:   &cimdCache{entries: make(map[string]cimdCacheEntry)},
+		cimdFetcher: fetchAndValidateCIMD,
 	}
 	utility.Logger.Info().
 		Str("issuer", openidConfiguration.Issuer).
@@ -151,24 +155,35 @@ func (s *ProxyAuthHandler) AuthenticateRequest(ctx context.Context, req *Authent
 		attribute.String("code_challenge_method", req.CodeChallengeMethod),
 	)
 
-	clientData, err := DecodeClientID(req.ClientID, s.encryption)
-
-	// Decrypt client_id to get redirect_uri
-	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, "Failed to decode client ID")
-		utility.Logger.Warn().Err(err).Str("client_id", req.ClientID).Msg("AuthenticateRequest: failed to decode client_id")
-		return "", fmt.Errorf("invalid_request")
-	}
-
-	// check redirect_uri is in clientData.RedirectURIs
-	if !slices.Contains(clientData.RedirectURIs, req.RedirectURI) {
-		span.SetStatus(codes.Error, "Invalid redirect URI")
-		utility.Logger.Warn().
-			Str("client_id", req.ClientID).
-			Str("redirect_uri", req.RedirectURI).
-			Msg("AuthenticateRequest: redirect_uri not registered for client")
-		return "", fmt.Errorf("invalid_request")
+	if isURLClientID(req.ClientID) {
+		doc, err := s.cimdFetcher(req.ClientID, s.httpClient, s.cimdCache)
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "Failed to fetch client metadata document")
+			utility.Logger.Warn().Err(err).Str("client_id", req.ClientID).Msg("AuthenticateRequest: CIMD fetch failed")
+			return "", fmt.Errorf("invalid_client")
+		}
+		if !slices.Contains(doc.RedirectURIs, req.RedirectURI) {
+			span.SetStatus(codes.Error, "Invalid redirect URI")
+			utility.Logger.Warn().Str("client_id", req.ClientID).Str("redirect_uri", req.RedirectURI).Msg("AuthenticateRequest: redirect_uri not in CIMD document")
+			return "", fmt.Errorf("invalid_request")
+		}
+	} else {
+		clientData, err := DecodeClientID(req.ClientID, s.encryption)
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "Failed to decode client ID")
+			utility.Logger.Warn().Err(err).Str("client_id", req.ClientID).Msg("AuthenticateRequest: failed to decode client_id")
+			return "", fmt.Errorf("invalid_request")
+		}
+		if !slices.Contains(clientData.RedirectURIs, req.RedirectURI) {
+			span.SetStatus(codes.Error, "Invalid redirect URI")
+			utility.Logger.Warn().
+				Str("client_id", req.ClientID).
+				Str("redirect_uri", req.RedirectURI).
+				Msg("AuthenticateRequest: redirect_uri not registered for client")
+			return "", fmt.Errorf("invalid_request")
+		}
 	}
 
 	stateData := StateData{
@@ -212,19 +227,30 @@ func (s *ProxyAuthHandler) ManageAuthorizationCode(ctx context.Context, req *Aut
 		return nil, nil, fmt.Errorf("invalid_request")
 	}
 
-	// Validate redirect URI against registered client
-	clientData, err := DecodeClientID(stateData.ClientID, s.encryption)
-	if err != nil {
-		utility.Logger.Warn().Err(err).Str("client_id", stateData.ClientID).Msg("ManageAuthorizationCode: failed to decode client_id")
-		return nil, nil, fmt.Errorf("invalid_request")
-	}
-
-	if !slices.Contains(clientData.RedirectURIs, stateData.RedirectURI) {
-		utility.Logger.Warn().
-			Str("client_id", stateData.ClientID).
-			Str("redirect_uri", stateData.RedirectURI).
-			Msg("ManageAuthorizationCode: redirect_uri not registered for client")
-		return nil, nil, fmt.Errorf("invalid_request")
+	// Validate redirect URI against registered client or CIMD document
+	if isURLClientID(stateData.ClientID) {
+		doc, err := s.cimdFetcher(stateData.ClientID, s.httpClient, s.cimdCache)
+		if err != nil {
+			utility.Logger.Warn().Err(err).Str("client_id", stateData.ClientID).Msg("ManageAuthorizationCode: CIMD fetch failed")
+			return nil, nil, fmt.Errorf("invalid_request")
+		}
+		if !slices.Contains(doc.RedirectURIs, stateData.RedirectURI) {
+			utility.Logger.Warn().Str("client_id", stateData.ClientID).Str("redirect_uri", stateData.RedirectURI).Msg("ManageAuthorizationCode: redirect_uri not in CIMD document")
+			return nil, nil, fmt.Errorf("invalid_request")
+		}
+	} else {
+		clientData, err := DecodeClientID(stateData.ClientID, s.encryption)
+		if err != nil {
+			utility.Logger.Warn().Err(err).Str("client_id", stateData.ClientID).Msg("ManageAuthorizationCode: failed to decode client_id")
+			return nil, nil, fmt.Errorf("invalid_request")
+		}
+		if !slices.Contains(clientData.RedirectURIs, stateData.RedirectURI) {
+			utility.Logger.Warn().
+				Str("client_id", stateData.ClientID).
+				Str("redirect_uri", stateData.RedirectURI).
+				Msg("ManageAuthorizationCode: redirect_uri not registered for client")
+			return nil, nil, fmt.Errorf("invalid_request")
+		}
 	}
 
 	// Validate redirect URI is a well-formed absolute URL with http(s) scheme
@@ -268,7 +294,7 @@ func (s *ProxyAuthHandler) RetrieveAccessToken(ctx context.Context, req *AccessT
 		return nil, fmt.Errorf("invalid_request")
 	}
 
-	if req.ClientID != "" {
+	if req.ClientID != "" && !isURLClientID(req.ClientID) {
 		span.SetAttributes(
 			attribute.String("client.id", req.ClientID),
 		)

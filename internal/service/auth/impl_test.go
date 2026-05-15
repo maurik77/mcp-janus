@@ -441,6 +441,73 @@ func TestAuthenticateRequest(t *testing.T) {
 		assert.Contains(t, authURL, "code_challenge=test-challenge")
 		assert.Contains(t, authURL, "code_challenge_method=S256")
 	})
+
+	t.Run("CIMD: valid client_id URL and redirect_uri", func(t *testing.T) {
+		cimdHandler := &ProxyAuthHandler{
+			config:      handler.config,
+			oauthConfig: handler.oauthConfig,
+			encryption:  enc,
+			tracer:      handler.tracer,
+			cimdCache:   &cimdCache{entries: make(map[string]cimdCacheEntry)},
+			cimdFetcher: func(url string, _ *http.Client, _ *cimdCache) (*ClientMetadataDocument, error) {
+				return &ClientMetadataDocument{
+					ClientID:     url,
+					ClientName:   "Test CIMD Client",
+					RedirectURIs: []string{"http://localhost/callback"},
+				}, nil
+			},
+		}
+		authURL, err := cimdHandler.AuthenticateRequest(context.Background(), &AuthenticateRequest{
+			ClientID:            "https://app.example.com/meta.json",
+			RedirectURI:         "http://localhost/callback",
+			State:               "state",
+			CodeChallenge:       "challenge",
+			CodeChallengeMethod: "S256",
+		})
+		require.NoError(t, err)
+		assert.Contains(t, authURL, "https://idp.example.com/authorize")
+	})
+
+	t.Run("CIMD: redirect_uri not in document", func(t *testing.T) {
+		cimdHandler := &ProxyAuthHandler{
+			config:      handler.config,
+			oauthConfig: handler.oauthConfig,
+			encryption:  enc,
+			tracer:      handler.tracer,
+			cimdCache:   &cimdCache{entries: make(map[string]cimdCacheEntry)},
+			cimdFetcher: func(url string, _ *http.Client, _ *cimdCache) (*ClientMetadataDocument, error) {
+				return &ClientMetadataDocument{
+					ClientID:     url,
+					ClientName:   "Test CIMD Client",
+					RedirectURIs: []string{"http://allowed.example.com/cb"},
+				}, nil
+			},
+		}
+		_, err := cimdHandler.AuthenticateRequest(context.Background(), &AuthenticateRequest{
+			ClientID:    "https://app.example.com/meta.json",
+			RedirectURI: "http://evil.example.com/steal",
+		})
+		assert.Error(t, err)
+	})
+
+	t.Run("CIMD: fetch failure returns invalid_client", func(t *testing.T) {
+		cimdHandler := &ProxyAuthHandler{
+			config:      handler.config,
+			oauthConfig: handler.oauthConfig,
+			encryption:  enc,
+			tracer:      handler.tracer,
+			cimdCache:   &cimdCache{entries: make(map[string]cimdCacheEntry)},
+			cimdFetcher: func(url string, _ *http.Client, _ *cimdCache) (*ClientMetadataDocument, error) {
+				return nil, fmt.Errorf("fetch failed")
+			},
+		}
+		_, err := cimdHandler.AuthenticateRequest(context.Background(), &AuthenticateRequest{
+			ClientID:    "https://app.example.com/meta.json",
+			RedirectURI: "http://localhost/callback",
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid_client")
+	})
 }
 
 // --- TestManageAuthorizationCode ---
@@ -506,6 +573,54 @@ func TestManageAuthorizationCode(t *testing.T) {
 		assert.Equal(t, "auth-code-456", code.Code)
 		assert.Equal(t, "http", redirectURL.Scheme)
 		assert.Equal(t, "localhost:3000", redirectURL.Host)
+	})
+
+	t.Run("CIMD: valid state with URL client_id", func(t *testing.T) {
+		cimdHandler := &ProxyAuthHandler{
+			encryption: &mockEncryption{},
+			tracer:     handler.tracer,
+			cimdCache:  &cimdCache{entries: make(map[string]cimdCacheEntry)},
+			cimdFetcher: func(url string, _ *http.Client, _ *cimdCache) (*ClientMetadataDocument, error) {
+				return &ClientMetadataDocument{
+					ClientID:     url,
+					ClientName:   "Test CIMD Client",
+					RedirectURIs: []string{"http://localhost:3000/callback"},
+				}, nil
+			},
+		}
+		cimdClientID := "https://app.example.com/meta.json"
+		encState := makeEncryptedState(t, "orig-state", "http://localhost:3000/callback", cimdClientID)
+
+		code, redirectURL, err := cimdHandler.ManageAuthorizationCode(context.Background(), &AuthorizationCodeData{
+			State: encState,
+			Code:  "auth-code",
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "orig-state", code.State)
+		assert.Equal(t, "localhost:3000", redirectURL.Host)
+	})
+
+	t.Run("CIMD: redirect_uri mismatch in state", func(t *testing.T) {
+		cimdHandler := &ProxyAuthHandler{
+			encryption: &mockEncryption{},
+			tracer:     handler.tracer,
+			cimdCache:  &cimdCache{entries: make(map[string]cimdCacheEntry)},
+			cimdFetcher: func(url string, _ *http.Client, _ *cimdCache) (*ClientMetadataDocument, error) {
+				return &ClientMetadataDocument{
+					ClientID:     url,
+					ClientName:   "Test CIMD Client",
+					RedirectURIs: []string{"http://allowed.example.com/cb"},
+				}, nil
+			},
+		}
+		cimdClientID := "https://app.example.com/meta.json"
+		encState := makeEncryptedState(t, "state", "http://evil.example.com/steal", cimdClientID)
+
+		_, _, err := cimdHandler.ManageAuthorizationCode(context.Background(), &AuthorizationCodeData{
+			State: encState,
+			Code:  "auth-code",
+		})
+		assert.Error(t, err)
 	})
 }
 
