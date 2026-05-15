@@ -237,7 +237,8 @@ func TestIntegration_DiscoveryEndpoints(t *testing.T) {
 
 		var body map[string]any
 		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-		assert.Equal(t, "http://localhost:8080", body["resource"])
+		assert.Equal(t, "http://localhost:8080/mcp", body["resource"])
+		assert.Equal(t, []any{"header"}, body["bearer_methods_supported"])
 	})
 }
 

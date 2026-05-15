@@ -56,12 +56,11 @@ func (h *MetadataHandler) AuthorizationServerMetadata() any {
 
 // ProtectedResourceMetadataHandler serves /.well-known/oauth-protected-resource (RFC 9728)
 func (h *MetadataHandler) ProtectedResourceMetadata() any {
-	data := map[string]any{
-		"authorization_servers": []string{h.issuer},
-		"resource":              h.config.Proxy.BaseURL,
+	return map[string]any{
+		"authorization_servers":    []string{h.issuer},
+		"resource":                 h.config.Proxy.BaseURL + "/mcp",
+		"bearer_methods_supported": []string{"header"},
 	}
-
-	return data
 }
 
 // WWWAuthenticateHeader returns the 401 header value

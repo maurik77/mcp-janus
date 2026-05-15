@@ -24,7 +24,7 @@ Janus risolve questo problema crittografando ogni JWT dell'IdP in un **token bea
 
 - **OAuth 2.1 + PKCE** -- flusso authorization code con code challenge S256
 - **RFC 7591** -- registrazione dinamica dei client
-- **RFC 9728** -- metadata delle risorse protette per il discovery
+- **RFC 9728** -- metadata delle risorse protette incluso `bearer_methods_supported: ["header"]`
 - **OpenID Connect Discovery** -- endpoint `.well-known/openid-configuration`
 
 ### Operatività
@@ -34,6 +34,7 @@ Janus risolve questo problema crittografando ogni JWT dell'IdP in un **token bea
 - **Logging strutturato** -- log JSON, livello configurabile, nessun segreto nell'output
 - **Shutdown graduale** -- drenaggio pulito delle connessioni su SIGTERM
 - **Singolo binario** -- `go build` produce un unico binario statico, nessuna dipendenza runtime
+- **Supporto CORS** -- opt-in per client MCP browser (es. MCP Inspector); origini, metodi e header configurabili; le preflight request bypassano il middleware di autenticazione
 
 ## Architettura
 
@@ -158,6 +159,10 @@ proxy:
   listen_addr: ":8080"                   # Indirizzo di ascolto
   log_level: info                        # trace|debug|info|warn|error|fatal|panic
   log_format: json                       # json
+  cors:
+    enabled: false                       # impostare a true per client browser (es. MCP Inspector)
+    allowed_origins:
+      - http://localhost:6274            # origin predefinita di MCP Inspector
 
 idp:
   client_id: your-idp-client-id         # OAuth client ID presso l'IdP
@@ -196,6 +201,7 @@ Gli override tramite variabili d'ambiente usano il prefisso `MCP_` con underscor
 export MCP_IDP_CLIENT_SECRET="your-secret"
 export MCP_PROXY_BASE_URL="https://proxy.example.com"
 export MCP_ENCRYPTION_MASTER_KEY="$(openssl rand -hex 32)"
+export MCP_PROXY_CORS_ENABLED=true          # abilita CORS (configurare le origini in config.yaml)
 ```
 
 Consulta [.env.example](.env.example) per tutte le variabili supportate.

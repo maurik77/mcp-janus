@@ -13,6 +13,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 )
@@ -40,6 +41,18 @@ func NewGinEngine(config *config.Config,
 
 	// OpenTelemetry middleware
 	r.Use(otelgin.Middleware("mcp-proxy"))
+
+	// CORS middleware — must run before auth so OPTIONS preflights are answered without a bearer token
+	if config.Proxy.CORS.Enabled {
+		r.Use(cors.New(cors.Config{
+			AllowOrigins:     config.Proxy.CORS.AllowedOrigins,
+			AllowMethods:     config.Proxy.CORS.AllowedMethods,
+			AllowHeaders:     config.Proxy.CORS.AllowedHeaders,
+			ExposeHeaders:    config.Proxy.CORS.ExposedHeaders,
+			AllowCredentials: config.Proxy.CORS.AllowCredentials,
+			MaxAge:           config.Proxy.CORS.MaxAge,
+		}))
+	}
 
 	// Custom timeout middleware
 	r.Use(func(c *gin.Context) {

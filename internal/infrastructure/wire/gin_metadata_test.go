@@ -91,8 +91,9 @@ func TestProtectedResourceMetadataEndpoint(t *testing.T) {
 		{
 			name: "successful protected resource metadata",
 			mockResponse: map[string]any{
-				"resource":              "https://example.com/api",
-				"authorization_servers": []any{"https://example.com"},
+				"resource":                 "https://example.com/api",
+				"authorization_servers":    []any{"https://example.com"},
+				"bearer_methods_supported": []any{"header"},
 			},
 			expectedStatusCode: http.StatusOK,
 		},
