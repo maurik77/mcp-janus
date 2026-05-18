@@ -126,13 +126,41 @@ func (s *ProxyAuthHandler) RegisterClient(ctx context.Context, req *RegisterRequ
 	span.SetStatus(codes.Ok, "Client registered successfully")
 
 	res := RegisterResponse{
-		ClientID:     clientId,
-		ClientSecret: secret,
+		ClientID:              clientId,
+		ClientSecret:          secret,
+		ClientIDIssuedAt:      time.Now().Unix(),
+		ClientSecretExpiresAt: 0,
+		ClientName:            req.ClientName,
+		RedirectURIs:          req.RedirectURIs,
+		GrantTypes:            grantTypesOrDefault(req.GrantTypes),
+		ResponseTypes:         responseTypesOrDefault(req.ResponseTypes),
+		TokenEndpointAuthMethod: tokenAuthMethodOrDefault(req.TokenEndpointAuthMethod),
 	}
 
 	utility.Logger.Info().Str("client_id", clientId).Msg("Client registered successfully")
 
 	return &res, nil
+}
+
+func grantTypesOrDefault(v []string) []string {
+	if len(v) == 0 {
+		return []string{"authorization_code"}
+	}
+	return v
+}
+
+func responseTypesOrDefault(v []string) []string {
+	if len(v) == 0 {
+		return []string{"code"}
+	}
+	return v
+}
+
+func tokenAuthMethodOrDefault(v string) string {
+	if v == "" {
+		return "none"
+	}
+	return v
 }
 
 func (s *ProxyAuthHandler) AuthenticateRequest(ctx context.Context, req *AuthenticateRequest) (string, error) {

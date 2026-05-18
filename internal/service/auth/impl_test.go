@@ -315,6 +315,17 @@ func TestRegisterClient(t *testing.T) {
 		assert.NotEmpty(t, resp.ClientSecret)
 		assert.Len(t, resp.ClientSecret, 64) // 32 bytes → 64 hex chars
 
+		// RFC 7591 §3.2.1 server-generated fields
+		assert.Greater(t, resp.ClientIDIssuedAt, int64(0))
+		assert.Equal(t, int64(0), resp.ClientSecretExpiresAt)
+
+		// Echo-back with defaults
+		assert.Equal(t, req.ClientName, resp.ClientName)
+		assert.Equal(t, req.RedirectURIs, resp.RedirectURIs)
+		assert.Equal(t, []string{"authorization_code"}, resp.GrantTypes)
+		assert.Equal(t, []string{"code"}, resp.ResponseTypes)
+		assert.Equal(t, "none", resp.TokenEndpointAuthMethod)
+
 		// Verify round-trip: decode client ID and verify contents
 		decoded, err := DecodeClientID(resp.ClientID, handler.encryption)
 		require.NoError(t, err)

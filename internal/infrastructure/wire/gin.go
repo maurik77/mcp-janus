@@ -256,6 +256,8 @@ func registerHandler(authHandler auth.Service) gin.HandlerFunc {
 
 		utility.Logger.Info().Str("client_id", res.ClientID).Msg("register: client registered successfully")
 		metrics.RecordClientRegistration(c.Request.Context(), true)
+		c.Header("Cache-Control", "no-store")
+		c.Header("Pragma", "no-cache")
 		c.JSON(http.StatusCreated, res)
 	}
 }

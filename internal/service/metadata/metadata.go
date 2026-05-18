@@ -58,7 +58,7 @@ func (h *MetadataHandler) AuthorizationServerMetadata() any {
 func (h *MetadataHandler) ProtectedResourceMetadata() any {
 	data := map[string]any{
 		"authorization_servers": []string{h.issuer},
-		"resource":              h.config.Proxy.BaseURL,
+		"resource":              h.config.Proxy.BaseURL + "/mcp",
 	}
 
 	return data
