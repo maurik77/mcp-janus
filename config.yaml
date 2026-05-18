@@ -1,6 +1,12 @@
 proxy:
   base_url: http://localhost:8080
   listen_addr: ":8080"
+  cors:
+    enabled: false
+    allowed_origins:
+      - http://localhost:6274   # MCP Inspector default origin
+    # allow_credentials: false
+    # max_age: 12h
 
 idp:
   client_id: 379eab96-a9ad-401f-8158-19b130fefbf3

@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"mcpproxy/internal/infrastructure/config"
 	"mcpproxy/internal/service/auth"
 	"mcpproxy/internal/service/metadata"
@@ -19,30 +20,70 @@ import (
 )
 
 type proxy struct {
-	cfg        config.Config
-	metadata   metadata.Service
-	auth       auth.Service
-	encryption utility.Encryption
-	tracer     trace.Tracer
+	cfg          config.Config
+	metadata     metadata.Service
+	auth         auth.Service
+	encryption   utility.Encryption
+	tracer       trace.Tracer
+	targetURL    *url.URL
+	reverseProxy *httputil.ReverseProxy
 }
 
 type key int
 
 const (
 	keyRealToken key = iota
-	keyUpstream
 )
 
 func NewProxy(cfg config.Config,
 	metadata metadata.Service,
 	auth auth.Service,
 	encryption utility.Encryption) (Proxy, error) {
+	targetURL, err := url.Parse(cfg.Upstream.BaseURL)
+	if err != nil {
+		return nil, fmt.Errorf("invalid upstream base_url %q: %w", cfg.Upstream.BaseURL, err)
+	}
+	if targetURL.Scheme == "" || targetURL.Host == "" {
+		return nil, fmt.Errorf("upstream base_url %q must be an absolute URL with scheme and host", cfg.Upstream.BaseURL)
+	}
+	if cfg.Upstream.PathPrefix != "" {
+		targetURL.Path = cfg.Upstream.PathPrefix
+	}
+
+	rp := &httputil.ReverseProxy{}
+	rp.Rewrite = func(pr *httputil.ProxyRequest) {
+		pr.SetURL(targetURL)
+		if realToken, ok := pr.In.Context().Value(keyRealToken).(string); ok {
+			pr.Out.Header.Set("Authorization", "Bearer "+realToken)
+		}
+		utility.LogHttpRequest(pr.Out)
+	}
+	rp.ModifyResponse = func(resp *http.Response) error {
+		resp.Header.Del("Server")
+		utility.LogHttpResponse(resp)
+		span := trace.SpanFromContext(resp.Request.Context())
+		span.SetAttributes(attribute.Int("http.status_code", resp.StatusCode))
+		if resp.StatusCode >= 400 {
+			span.SetStatus(codes.Error, "Upstream returned error")
+		} else {
+			span.SetStatus(codes.Ok, "Request proxied successfully")
+		}
+		return nil
+	}
+
+	utility.Logger.Info().
+		Str("upstream_url", targetURL.String()).
+		Str("upstream_name", cfg.Upstream.Name).
+		Msg("Proxy initialized")
+
 	return &proxy{
-		cfg:        cfg,
-		metadata:   metadata,
-		auth:       auth,
-		encryption: encryption,
-		tracer:     otel.Tracer("mcp-proxy.server"),
+		cfg:          cfg,
+		metadata:     metadata,
+		auth:         auth,
+		encryption:   encryption,
+		tracer:       otel.Tracer("mcp-proxy.server"),
+		targetURL:    targetURL,
+		reverseProxy: rp,
 	}, nil
 }
 
@@ -55,6 +96,7 @@ func (p *proxy) AuthMiddleware() func(http.Handler) http.Handler {
 
 			token, ok := extractBearerToken(r)
 			if !ok {
+				utility.Logger.Warn().Str("remote_addr", r.RemoteAddr).Msg("AuthMiddleware: missing or invalid bearer token")
 				span.SetStatus(codes.Error, "Missing or invalid bearer token")
 				w.Header().Set("WWW-Authenticate", p.metadata.WWWAuthenticateHeader())
 				http.Error(w, `{"error":"invalid_token"}`, http.StatusUnauthorized)
@@ -66,6 +108,7 @@ func (p *proxy) AuthMiddleware() func(http.Handler) http.Handler {
 			// Decrypt opaque token
 			data, err := p.encryption.Decrypt(token)
 			if err != nil {
+				utility.Logger.Warn().Err(err).Str("remote_addr", r.RemoteAddr).Msg("AuthMiddleware: token decryption failed")
 				span.RecordError(err)
 				span.SetStatus(codes.Error, "Token decryption failed")
 				http.Error(w, `{"error":"invalid_token"}`, http.StatusUnauthorized)
@@ -74,8 +117,9 @@ func (p *proxy) AuthMiddleware() func(http.Handler) http.Handler {
 
 			span.AddEvent("Token decrypted")
 
-			jwtToken, err := p.auth.ValidateJWT(string(data))
+			jwtToken, err := p.auth.ValidateJWT(ctx, string(data))
 			if err != nil || !jwtToken.Valid {
+				utility.Logger.Warn().Err(err).Str("remote_addr", r.RemoteAddr).Msg("AuthMiddleware: JWT validation failed")
 				if err != nil {
 					span.RecordError(err)
 				}
@@ -89,24 +133,32 @@ func (p *proxy) AuthMiddleware() func(http.Handler) http.Handler {
 			// Extract claims
 			claims, ok := jwtToken.Claims.(jwt.MapClaims)
 			if !ok {
+				utility.Logger.Warn().Str("remote_addr", r.RemoteAddr).Msg("AuthMiddleware: failed to parse JWT claims")
 				span.SetStatus(codes.Error, "Failed to parse claims")
-				panic("cannot parse claims")
+				http.Error(w, `{"error":"invalid_token"}`, http.StatusUnauthorized)
+				return
 			}
 
 			// Add subject to span attributes
 			if sub, ok := claims["sub"].(string); ok {
 				span.SetAttributes(attribute.String("user.id", sub))
+				utility.Logger.Info().Str("sub", sub).Str("remote_addr", r.RemoteAddr).Msg("AuthMiddleware: authentication successful")
 			}
 
 			ctx = context.WithValue(ctx, keyRealToken, token)
 
 			for source, dest := range p.cfg.IDP.ClaimsMapping {
 				if value, exists := claims[source]; exists {
-					r.Header.Add(dest, value.(string))
+					if strValue, ok := value.(string); ok {
+						r.Header.Set(dest, strValue)
+					}
 				}
 			}
 
-			ctx = context.WithValue(ctx, keyUpstream, p.cfg.Upstream)
+			for header, value := range p.cfg.IDP.FixedHeaders {
+				r.Header.Set(header, value)
+			}
+
 			span.SetStatus(codes.Ok, "Authentication successful")
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
@@ -115,69 +167,24 @@ func (p *proxy) AuthMiddleware() func(http.Handler) http.Handler {
 
 // ProxyHandler forwards request to correct upstream
 func (p *proxy) ProxyHandler(w http.ResponseWriter, r *http.Request) {
-	ctx, span := p.tracer.Start(r.Context(), "proxy.ProxyHandler")
+	_, span := p.tracer.Start(r.Context(), "proxy.ProxyHandler")
 	defer span.End()
-
-	upstream := r.Context().Value(keyUpstream).(config.Upstream)
-	realToken := r.Context().Value(keyRealToken).(string)
 
 	span.SetAttributes(
 		attribute.String("http.method", r.Method),
 		attribute.String("http.path", r.URL.Path),
-		attribute.String("upstream.name", upstream.Name),
-		attribute.String("upstream.base_url", upstream.BaseURL),
+		attribute.String("upstream.name", p.cfg.Upstream.Name),
+		attribute.String("upstream.target_url", p.targetURL.String()),
 	)
-
-	// Build target URL
-	targetURL, _ := url.Parse(upstream.BaseURL)
-
-	if upstream.PathPrefix != "" {
-		targetURL.Path = upstream.PathPrefix
-	}
-
-	span.SetAttributes(attribute.String("upstream.target_url", targetURL.String()))
 	span.AddEvent("Forwarding request to upstream")
+	utility.Logger.Info().
+		Str("method", r.Method).
+		Str("path", r.URL.Path).
+		Str("upstream", p.cfg.Upstream.Name).
+		Str("target_url", p.targetURL.String()).
+		Msg("ProxyHandler: forwarding request to upstream")
 
-	// Create reverse proxy
-	proxy := httputil.NewSingleHostReverseProxy(targetURL)
-
-	// Modify request
-	originalDirector := proxy.Director
-	proxy.Director = func(req *http.Request) {
-		originalDirector(req)
-		req.Host = targetURL.Host
-		req.Header.Set("Authorization", "Bearer "+realToken)
-		// Copy all headers except Host
-		for k, v := range r.Header {
-			if k != "Host" {
-				req.Header[k] = v
-			}
-		}
-
-		utility.LogHttpRequest(req)
-	}
-
-	// Modify response (optional)
-	proxy.ModifyResponse = func(resp *http.Response) error {
-		// Remove security headers from upstream if needed
-		resp.Header.Del("Server")
-
-		// Print the body of the response for debugging
-		utility.LogHttpResponse(resp)
-
-		span.SetAttributes(attribute.Int("http.status_code", resp.StatusCode))
-		if resp.StatusCode >= 400 {
-			span.SetStatus(codes.Error, "Upstream returned error")
-		} else {
-			span.SetStatus(codes.Ok, "Request proxied successfully")
-		}
-		return nil
-	}
-
-	// Suppress unused variable warning
-	_ = ctx
-
-	proxy.ServeHTTP(w, r)
+	p.reverseProxy.ServeHTTP(w, r)
 }
 
 // extractBearerToken extracts token from Authorization header

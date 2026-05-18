@@ -1,0 +1,50 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "mcp-janus.fullname" . }}
+  labels:
+    {{- include "mcp-janus.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    proxy:
+      issuer: {{ .Values.proxy.issuer | quote }}
+      base_url: {{ .Values.proxy.baseUrl | quote }}
+      listen_addr: {{ .Values.proxy.listenAddr | quote }}
+      probe_addr: {{ .Values.proxy.probeAddr | quote }}
+      log_level: {{ .Values.proxy.logLevel | quote }}
+      log_format: {{ .Values.proxy.logFormat | quote }}
+      tls: {{ .Values.proxy.tls }}
+
+    idp:
+      client_id: {{ .Values.idp.clientId | quote }}
+      client_secret: ""
+      openid_configuration_url: {{ .Values.idp.openidConfigurationUrl | quote }}
+      skip_tls_verify: {{ .Values.idp.skipTlsVerify | default false }}
+      jwt_leeway: {{ .Values.idp.jwtLeeway | quote }}
+      scopes:
+        {{- range .Values.idp.scopes }}
+        - {{ . | quote }}
+        {{- end }}
+      claims_mapping:
+        {{- range $k, $v := .Values.idp.claimsMapping }}
+        {{ $k }}: {{ $v | quote }}
+        {{- end }}
+      fixed_headers:
+        {{- range $k, $v := .Values.idp.fixedHeaders }}
+        {{ $k }}: {{ $v | quote }}
+        {{- end }}        
+
+    encryption:
+      master_key: ""
+
+    telemetry:
+      enabled: {{ .Values.telemetry.enabled }}
+      service_name: {{ .Values.telemetry.serviceName | quote }}
+      service_version: {{ .Values.telemetry.serviceVersion | quote }}
+      otlp_endpoint: {{ .Values.telemetry.otlpEndpoint | quote }}
+
+    upstream:
+      name: {{ .Values.upstream.name | quote }}
+      resource: {{ .Values.upstream.resource | quote }}
+      base_url: {{ .Values.upstream.baseUrl | quote }}
+      path_prefix: {{ .Values.upstream.pathPrefix | quote }}

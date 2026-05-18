@@ -1,0 +1,6 @@
+apiVersion: v2
+name: mcp-janus
+description: OAuth 2.1 MCP Proxy Server
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

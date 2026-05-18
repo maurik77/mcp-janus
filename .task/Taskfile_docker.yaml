@@ -1,0 +1,38 @@
+---
+version: '3'
+
+vars:
+  IMAGE_NAME: '{{.IMAGE_NAME | default "!MISSING_REQUIRED_IMAGE_NAME!"}}'
+  IMAGE_TAG: '{{.IMAGE_TAG | default "latest"}}'
+  DOCKER_FILE_NAME: '{{.DOCKER_FILE_NAME | default "./Dockerfile.proxy"}}'
+  BUILD_ENV_VARIABLES: '{{.BUILD_ENV_VARIABLES | default ""}}'
+  BUILD_CONTEXT_PATH: '{{.BUILD_CONTEXT_PATH | default "."}}'
+  BUILD_ADDITIONAL_ARGS: '{{.BUILD_ADDITIONAL_ARGS | default ""}}' # use this to pass --build-arg flags (e.g. "--build-arg varname=value")
+  RUN_COMMAND: '{{.RUN_COMMAND | default ""}}'
+  RUN_PORT: '{{.RUN_PORT | default "!MISSING_REQUIRED_PORT!"}}'
+  RUN_ADDITIONAL_PORTS: '{{.RUN_ADDITIONAL_PORTS | default ""}}'
+  RUN_ENV_VARIABLES: '{{.RUN_ENV_VARIABLES | default ""}}'
+  RUN_VOLUMES: '{{.RUN_VOLUMES | default ""}}'
+
+tasks:
+  build:
+    desc: 'Build the {{.IMAGE_NAME}}:{{.IMAGE_TAG}} image'
+    cmds:
+      - '{{.BUILD_ENV_VARIABLES}} docker build {{.BUILD_ADDITIONAL_ARGS}} --network=host -t {{.IMAGE_NAME}}:{{.IMAGE_TAG}} -f {{.DOCKER_FILE_NAME}} {{.BUILD_CONTEXT_PATH}}'
+    silent: true
+
+  run:
+    desc: run project
+    deps:
+      - build
+    cmds:
+      - docker run -it --rm {{.RUN_ENV_VARIABLES}} {{if .RUN_VOLUMES}}{{.RUN_VOLUMES}}{{end}} -p {{.RUN_PORT}} {{if .RUN_ADDITIONAL_PORTS}}-p {{.RUN_ADDITIONAL_PORTS}}{{end}} {{.IMAGE_NAME}}:{{.IMAGE_TAG}} {{.RUN_COMMAND}}
+    silent: false
+
+  load-into-kind:
+    desc: 'Load the docker {{.IMAGE_NAME}}:{{.IMAGE_TAG}} image into kind'
+    deps:
+      - build
+    cmds:
+      - kind load --name kind docker-image {{.IMAGE_NAME}}:{{.IMAGE_TAG}}
+    silent: true

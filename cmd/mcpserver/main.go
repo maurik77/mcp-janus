@@ -17,9 +17,6 @@ func main() {
 
 }
 
-type GetInfoParams struct {
-}
-
 type GetWeatherParams struct {
 	City string `json:"city" jsonschema:"City to get weather for (e.g. nyc, sf, boston, or all other cities)"`
 	Date string `json:"date" jsonschema:"Date to get weather for (YYYY-MM-DD)"`
@@ -52,11 +49,6 @@ func runServer(url string) {
 		Description: "Get weather information for a specific city and date",
 	}, getWeather)
 
-	// mcp.AddTool(server, &mcp.Tool{
-	// 	Name:        "knowYourInfo",
-	// 	Description: "Get information about the user like UPN, email, roles, etc.",
-	// }, getUserInfo)
-
 	// Create the streamable HTTP handler.
 	handler := mcp.NewStreamableHTTPHandler(func(req *http.Request) *mcp.Server {
 		return server
@@ -73,31 +65,6 @@ func runServer(url string) {
 	}
 }
 
-func getUserInfo(ctx context.Context, req *mcp.CallToolRequest, params *GetInfoParams) (*mcp.CallToolResult, any, error) {
-	// read all headers (req.Extra.Header["X_upn"]) start with X_
-	userInfo := make(map[string]string)
-	for key, values := range req.Extra.Header {
-		if len(values) > 0 && key[:2] == "X_" {
-			// remove X_ prefix
-			userInfo[key[2:]] = values[0]
-		}
-	}
-
-	content, err := json.Marshal(userInfo)
-	if err != nil {
-		log.Printf("Error marshalling response: %v", err)
-		return nil, nil, err
-	}
-
-	return &mcp.CallToolResult{
-		Content: []mcp.Content{
-			&mcp.TextContent{
-				Text: string(content),
-			},
-		},
-	}, nil, nil
-}
-
 func getWeather(ctx context.Context, req *mcp.CallToolRequest, params *GetWeatherParams) (*mcp.CallToolResult, any, error) {
 	// Define time zones for each city
 	response := generateFakeWeather(params.City, params.Date)
@@ -105,14 +72,23 @@ func getWeather(ctx context.Context, req *mcp.CallToolRequest, params *GetWeathe
 	// print req.Extra.Header
 	log.Printf("Request Headers: %v", req.Extra.Header)
 
-	user := "unknown"
-	user_values, ok := req.Extra.Header["X_upn"]
+	user := ""
 
-	if ok {
-		user = user_values[0]
+	// get all headers start with X_ or x_ and add to user string
+	for key, values := range req.Extra.Header {
+		if len(values) > 0 && (key[:2] == "X_") {
+			if user != "" {
+				user += ", "
+			}
+			user += key + ": " + values[0]
+		}
 	}
 
-	response.HelloMessage = "Hello, " + user + "! Here is the weather you requested."
+	if user == "" {
+		user = "unknown user"
+	}
+
+	response.HelloMessage = "Hello, (" + user + ")! Here is the weather you requested."
 
 	content, err := json.Marshal(response)
 	if err != nil {

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"mcpproxy/internal/infrastructure/config"
+	"mcpproxy/internal/infrastructure/observability"
 	"mcpproxy/internal/infrastructure/telemetry"
 	"mcpproxy/internal/infrastructure/wire"
 	"mcpproxy/internal/server"
@@ -75,6 +76,8 @@ func main() {
 		Handler: r,
 	}
 
+	probeSrv := observability.NewProbeServer(cfg.Proxy.ProbeAddr)
+
 	go func() {
 		utility.Logger.Info().Str("addr", cfg.Proxy.ListenAddr).Msg("MCP Proxy Server starting")
 		utility.Logger.Info().Str("base_url", cfg.Proxy.BaseURL).Msg("Base URL")
@@ -92,6 +95,8 @@ func main() {
 		}
 	}()
 
+	probeSrv.Start()
+
 	// Graceful shutdown
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
@@ -102,6 +107,9 @@ func main() {
 	defer cancel()
 	if err := srv.Shutdown(ctx); err != nil {
 		utility.Logger.Fatal().Err(err).Msg("Server forced to shutdown")
+	}
+	if err := probeSrv.Shutdown(ctx); err != nil {
+		utility.Logger.Fatal().Err(err).Msg("Probe server forced to shutdown")
 	}
 	utility.Logger.Info().Msg("Server stopped.")
 }
