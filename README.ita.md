@@ -22,7 +22,7 @@ Janus risolve questo problema crittografando ogni JWT dell'IdP in un **token bea
 
 ### Conformità agli Standard
 
-- **OAuth 2.1 + PKCE** -- flusso authorization code con code challenge S256
+- **OAuth 2.1 + PKCE** -- flusso authorization code con code challenge S256; i client pubblici (senza `client_secret`) sono completamente supportati — PKCE è l'unico meccanismo di autenticazione
 - **RFC 7591** -- registrazione dinamica dei client con risposta completa §3.2.1 (echo-back dei metadata, `client_id_issued_at`, `client_secret_expires_at`)
 - **RFC 8414** -- Authorization Server Metadata OAuth 2.0 (`.well-known/oauth-authorization-server`)
 - **RFC 9728** -- metadata delle risorse protette incluso `bearer_methods_supported: ["header"]`
@@ -32,7 +32,7 @@ Janus risolve questo problema crittografando ogni JWT dell'IdP in un **token bea
 
 - **OpenTelemetry** -- tracing distribuito e metriche business (auth, scambio token, proxy, errori upstream)
 - **Docker Compose** -- stack proxy + osservabilità con un solo comando (Jaeger, Prometheus, Grafana)
-- **Logging strutturato** -- log JSON, livello configurabile, nessun segreto nell'output
+- **Logging strutturato** -- log JSON, livello configurabile; il livello `debug` emette i dettagli completi del flusso auth inclusi token grezzi, segreti e claim JWT — usare solo per troubleshooting, mai in produzione
 - **Shutdown graduale** -- drenaggio pulito delle connessioni su SIGTERM
 - **Singolo binario** -- `go build` produce un unico binario statico, nessuna dipendenza runtime
 - **Supporto CORS** -- opt-in per client MCP browser (es. MCP Inspector); origini, metodi e header configurabili; le preflight request bypassano il middleware di autenticazione

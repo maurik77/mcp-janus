@@ -22,7 +22,7 @@ Janus solves this by encrypting every IdP JWT into an **opaque bearer token** us
 
 ### Standards Compliance
 
-- **OAuth 2.1 + PKCE** -- authorization code flow with S256 code challenge
+- **OAuth 2.1 + PKCE** -- authorization code flow with S256 code challenge; public clients (no `client_secret`) are fully supported — PKCE is the sole authentication mechanism
 - **RFC 7591** -- dynamic client registration with complete §3.2.1 response (metadata echo-back, `client_id_issued_at`, `client_secret_expires_at`)
 - **RFC 8414** -- OAuth 2.0 Authorization Server Metadata (`.well-known/oauth-authorization-server`)
 - **RFC 9728** -- protected resource metadata including `bearer_methods_supported: ["header"]`
@@ -32,7 +32,7 @@ Janus solves this by encrypting every IdP JWT into an **opaque bearer token** us
 
 - **OpenTelemetry** -- distributed tracing and business metrics (auth, token exchange, proxy, upstream errors)
 - **Docker Compose** -- one-command proxy + observability stack (Jaeger, Prometheus, Grafana)
-- **Structured logging** -- JSON logs, configurable level, no secrets in output
+- **Structured logging** -- JSON logs, configurable level; `debug` level emits full auth flow details including raw tokens, secrets and JWT claims — use only for troubleshooting, never in production
 - **Graceful shutdown** -- clean connection draining on SIGTERM
 - **Single binary** -- `go build` produces one static binary, no runtime dependencies
 - **CORS support** -- opt-in for browser-based MCP clients (e.g. MCP Inspector); configurable allowed origins, methods, and headers; preflight requests bypass auth middleware
