@@ -51,6 +51,13 @@ type AccessTokenRequest struct {
 	GrantTypes   string `json:"grant_type" form:"grant_type"`
 }
 
+type RefreshTokenRequest struct {
+	GrantType    string `json:"grant_type"    form:"grant_type"`
+	RefreshToken string `json:"refresh_token" form:"refresh_token"`
+	ClientID     string `json:"client_id"     form:"client_id"`
+	ClientSecret string `json:"client_secret" form:"client_secret"`
+}
+
 type ClientIdData struct {
 	RedirectURIs []string `json:"r"`
 	Secret       string   `json:"s"`

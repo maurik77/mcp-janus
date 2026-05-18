@@ -3,6 +3,7 @@ package wire
 import (
 	"bytes"
 	"mcpproxy/internal/infrastructure/config"
+	"mcpproxy/internal/service/auth"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -10,11 +11,19 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"golang.org/x/oauth2"
 )
 
 func TestRefreshHandler(t *testing.T) {
 	gin.SetMode(gin.TestMode)
+
+	successToken := &oauth2.Token{
+		AccessToken:  "new_opaque_access",
+		RefreshToken: "new_opaque_refresh",
+		TokenType:    "Bearer",
+		Expiry:       time.Now().Add(1 * time.Hour),
+	}
 
 	tests := []struct {
 		name               string
@@ -26,32 +35,40 @@ func TestRefreshHandler(t *testing.T) {
 		expectedBody       string
 	}{
 		{
-			name:        "successful refresh - JSON",
-			requestBody: `{"refresh_token": "encrypted_refresh_token"}`,
-			contentType: "application/json",
-			mockToken: &oauth2.Token{
-				AccessToken:  "new_opaque_access",
-				RefreshToken: "new_opaque_refresh",
-				TokenType:    "Bearer",
-				Expiry:       time.Now().Add(1 * time.Hour),
-			},
+			name:               "successful refresh - JSON",
+			requestBody:        `{"refresh_token": "encrypted_refresh_token"}`,
+			contentType:        "application/json",
+			mockToken:          successToken,
 			mockError:          nil,
 			expectedStatusCode: http.StatusOK,
 			expectedBody:       "new_opaque_access",
 		},
 		{
-			name:        "successful refresh - form data",
-			requestBody: "refresh_token=encrypted_refresh_token",
-			contentType: "application/x-www-form-urlencoded",
-			mockToken: &oauth2.Token{
-				AccessToken:  "new_opaque_access",
-				RefreshToken: "new_opaque_refresh",
-				TokenType:    "Bearer",
-				Expiry:       time.Now().Add(1 * time.Hour),
-			},
+			name:               "successful refresh - form data",
+			requestBody:        "refresh_token=encrypted_refresh_token",
+			contentType:        "application/x-www-form-urlencoded",
+			mockToken:          successToken,
 			mockError:          nil,
 			expectedStatusCode: http.StatusOK,
 			expectedBody:       "new_opaque_access",
+		},
+		{
+			name:               "explicit grant_type=refresh_token",
+			requestBody:        `{"grant_type": "refresh_token", "refresh_token": "encrypted_refresh_token"}`,
+			contentType:        "application/json",
+			mockToken:          successToken,
+			mockError:          nil,
+			expectedStatusCode: http.StatusOK,
+			expectedBody:       "new_opaque_access",
+		},
+		{
+			name:               "wrong grant_type",
+			requestBody:        `{"grant_type": "authorization_code", "refresh_token": "encrypted_refresh_token"}`,
+			contentType:        "application/json",
+			mockToken:          nil,
+			mockError:          nil,
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       "unsupported_grant_type",
 		},
 		{
 			name:               "refresh service error",
@@ -95,11 +112,10 @@ func TestRefreshHandler(t *testing.T) {
 				})
 			})
 
-			if tt.mockError != nil || tt.mockToken != nil {
-				mockAuth.On("RefreshToken", tt.requestBody).Maybe().Return(tt.mockToken, tt.mockError)
-				// Also set up for the actual parsed value
-				mockAuth.On("RefreshToken", "encrypted_refresh_token").Maybe().Return(tt.mockToken, tt.mockError)
-				mockAuth.On("RefreshToken", "bad_token").Maybe().Return(tt.mockToken, tt.mockError)
+			if tt.mockToken != nil || tt.mockError != nil {
+				mockAuth.On("RefreshToken", mock.MatchedBy(func(req *auth.RefreshTokenRequest) bool {
+					return req != nil && req.RefreshToken != ""
+				})).Return(tt.mockToken, tt.mockError)
 			}
 
 			cfg := &config.Config{}

@@ -207,16 +207,18 @@ func tokenHandler(authHandler auth.Service) gin.HandlerFunc {
 
 // refreshHandler: client → Proxy
 func refreshHandler(authHandler auth.Service) gin.HandlerFunc {
-	type refreshRequest struct {
-		RefreshToken string `json:"refresh_token" form:"refresh_token"`
-	}
-
 	return func(c *gin.Context) {
 		metrics := c.Request.Context().Value(metricsKey).(*telemetry.Metrics)
-		req := &refreshRequest{}
+		req := &auth.RefreshTokenRequest{}
 		if err := c.Bind(req); err != nil {
 			utility.Logger.Warn().Err(err).Msg("refresh: failed to bind request")
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request"})
+			return
+		}
+
+		if req.GrantType != "" && req.GrantType != "refresh_token" {
+			utility.Logger.Warn().Str("grant_type", req.GrantType).Msg("refresh: unsupported grant_type")
+			c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported_grant_type"})
 			return
 		}
 
@@ -226,10 +228,10 @@ func refreshHandler(authHandler auth.Service) gin.HandlerFunc {
 			return
 		}
 
-		utility.Logger.Info().Msg("refresh: token refresh requested")
+		utility.Logger.Info().Str("client_id", req.ClientID).Msg("refresh: token refresh requested")
 
 		start := time.Now()
-		opaqueToken, err := authHandler.RefreshToken(c.Request.Context(), req.RefreshToken)
+		opaqueToken, err := authHandler.RefreshToken(c.Request.Context(), req)
 		duration := time.Since(start)
 
 		if err != nil {

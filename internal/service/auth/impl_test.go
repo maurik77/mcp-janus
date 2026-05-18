@@ -698,11 +698,19 @@ func TestRetrieveAccessToken(t *testing.T) {
 // --- TestRefreshToken ---
 
 func TestRefreshToken(t *testing.T) {
+	t.Run("nil request", func(t *testing.T) {
+		handler := &ProxyAuthHandler{
+			tracer: otel.Tracer("test"),
+		}
+		_, err := handler.RefreshToken(context.Background(), nil)
+		assert.Error(t, err)
+	})
+
 	t.Run("empty refresh token", func(t *testing.T) {
 		handler := &ProxyAuthHandler{
 			tracer: otel.Tracer("test"),
 		}
-		_, err := handler.RefreshToken(context.Background(), "")
+		_, err := handler.RefreshToken(context.Background(), &RefreshTokenRequest{})
 		assert.Error(t, err)
 	})
 
@@ -715,7 +723,7 @@ func TestRefreshToken(t *testing.T) {
 			},
 			tracer: otel.Tracer("test"),
 		}
-		_, err := handler.RefreshToken(context.Background(), "bad-token")
+		_, err := handler.RefreshToken(context.Background(), &RefreshTokenRequest{RefreshToken: "bad-token"})
 		assert.Error(t, err)
 	})
 
@@ -728,7 +736,7 @@ func TestRefreshToken(t *testing.T) {
 			},
 			tracer: otel.Tracer("test"),
 		}
-		_, err := handler.RefreshToken(context.Background(), "some-token")
+		_, err := handler.RefreshToken(context.Background(), &RefreshTokenRequest{RefreshToken: "some-token"})
 		assert.Error(t, err)
 	})
 
@@ -748,7 +756,7 @@ func TestRefreshToken(t *testing.T) {
 			tracer:     otel.Tracer("test"),
 		}
 
-		_, err := handler.RefreshToken(context.Background(), "encrypted_real-refresh-token")
+		_, err := handler.RefreshToken(context.Background(), &RefreshTokenRequest{RefreshToken: "encrypted_real-refresh-token"})
 		assert.Error(t, err)
 	})
 
@@ -768,7 +776,7 @@ func TestRefreshToken(t *testing.T) {
 			tracer:     otel.Tracer("test"),
 		}
 
-		token, err := handler.RefreshToken(context.Background(), "encrypted_real-refresh-token")
+		token, err := handler.RefreshToken(context.Background(), &RefreshTokenRequest{RefreshToken: "encrypted_real-refresh-token"})
 		require.NoError(t, err)
 		assert.Equal(t, "encrypted_new-access-jwt", token.AccessToken)
 		assert.Equal(t, "encrypted_new-refresh-token", token.RefreshToken)
@@ -794,7 +802,91 @@ func TestRefreshToken(t *testing.T) {
 			tracer: otel.Tracer("test"),
 		}
 
-		_, err := handler.RefreshToken(context.Background(), "encrypted_real-refresh-token")
+		_, err := handler.RefreshToken(context.Background(), &RefreshTokenRequest{RefreshToken: "encrypted_real-refresh-token"})
+		assert.Error(t, err)
+	})
+
+	t.Run("client_id present, secret matches", func(t *testing.T) {
+		ts := httptest.NewServer(tokenHandler("new-access-jwt", "new-refresh-token", http.StatusOK))
+		defer ts.Close()
+
+		enc := &mockEncryption{}
+		clientID := makeEncryptedClientID(t, []string{"http://localhost/cb"}, "my-secret")
+
+		handler := &ProxyAuthHandler{
+			oauthConfig: &oauth2.Config{
+				ClientID: "test-client",
+				Endpoint: oauth2.Endpoint{TokenURL: ts.URL, AuthStyle: oauth2.AuthStyleInParams},
+			},
+			encryption: enc,
+			tracer:     otel.Tracer("test"),
+		}
+
+		token, err := handler.RefreshToken(context.Background(), &RefreshTokenRequest{
+			RefreshToken: "encrypted_real-refresh-token",
+			ClientID:     clientID,
+			ClientSecret: "my-secret",
+		})
+		require.NoError(t, err)
+		assert.NotEmpty(t, token.AccessToken)
+	})
+
+	t.Run("client_id present, secret mismatch", func(t *testing.T) {
+		enc := &mockEncryption{}
+		clientID := makeEncryptedClientID(t, []string{"http://localhost/cb"}, "correct-secret")
+
+		handler := &ProxyAuthHandler{
+			encryption: enc,
+			tracer:     otel.Tracer("test"),
+		}
+
+		_, err := handler.RefreshToken(context.Background(), &RefreshTokenRequest{
+			RefreshToken: "encrypted_real-refresh-token",
+			ClientID:     clientID,
+			ClientSecret: "wrong-secret",
+		})
+		assert.Error(t, err)
+	})
+
+	t.Run("client_id present, no secret (public client)", func(t *testing.T) {
+		ts := httptest.NewServer(tokenHandler("new-access-jwt", "new-refresh-token", http.StatusOK))
+		defer ts.Close()
+
+		enc := &mockEncryption{}
+		clientID := makeEncryptedClientID(t, []string{"http://localhost/cb"}, "stored-secret")
+
+		handler := &ProxyAuthHandler{
+			oauthConfig: &oauth2.Config{
+				ClientID: "test-client",
+				Endpoint: oauth2.Endpoint{TokenURL: ts.URL, AuthStyle: oauth2.AuthStyleInParams},
+			},
+			encryption: enc,
+			tracer:     otel.Tracer("test"),
+		}
+
+		token, err := handler.RefreshToken(context.Background(), &RefreshTokenRequest{
+			RefreshToken: "encrypted_real-refresh-token",
+			ClientID:     clientID,
+			ClientSecret: "",
+		})
+		require.NoError(t, err)
+		assert.NotEmpty(t, token.AccessToken)
+	})
+
+	t.Run("invalid client_id ciphertext", func(t *testing.T) {
+		handler := &ProxyAuthHandler{
+			encryption: &mockEncryption{
+				decryptFunc: func(enc string) ([]byte, error) {
+					return nil, fmt.Errorf("decryption failed")
+				},
+			},
+			tracer: otel.Tracer("test"),
+		}
+
+		_, err := handler.RefreshToken(context.Background(), &RefreshTokenRequest{
+			RefreshToken: "encrypted_real-refresh-token",
+			ClientID:     "tampered-client-id",
+		})
 		assert.Error(t, err)
 	})
 }

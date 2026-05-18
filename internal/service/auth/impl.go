@@ -439,21 +439,51 @@ func (s *ProxyAuthHandler) RetrieveAccessToken(ctx context.Context, req *AccessT
 	return opaqueToken, err
 }
 
-func (s *ProxyAuthHandler) RefreshToken(ctx context.Context, refreshToken string) (*oauth2.Token, error) {
+func (s *ProxyAuthHandler) RefreshToken(ctx context.Context, req *RefreshTokenRequest) (*oauth2.Token, error) {
 	ctx, span := s.tracer.Start(ctx, "auth.RefreshToken")
 	defer span.End()
 
+	if req == nil {
+		span.SetStatus(codes.Error, "Invalid request")
+		utility.Logger.Warn().Msg("RefreshToken: nil request")
+		return nil, fmt.Errorf("invalid_request")
+	}
+
 	utility.Logger.Debug().
-		Str("encrypted_refresh_token", refreshToken).
+		Str("grant_type", req.GrantType).
+		Str("client_id", req.ClientID).
+		Str("client_secret", req.ClientSecret).
+		Str("encrypted_refresh_token", req.RefreshToken).
 		Msg("[DEBUG] RefreshToken: request received")
 
-	if refreshToken == "" {
+	if req.RefreshToken == "" {
 		span.SetStatus(codes.Error, "Missing refresh token")
 		utility.Logger.Warn().Msg("RefreshToken: empty refresh token")
 		return nil, fmt.Errorf("invalid_request")
 	}
 
-	decryptedRefreshToken, err := s.encryption.Decrypt(refreshToken)
+	if req.ClientID != "" {
+		clientData, err := DecodeClientID(req.ClientID, s.encryption)
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "Failed to decode client ID")
+			utility.Logger.Warn().Err(err).Str("client_id", req.ClientID).Msg("RefreshToken: failed to decode client_id")
+			return nil, fmt.Errorf("invalid_request")
+		}
+		utility.Logger.Debug().
+			Str("client_id", req.ClientID).
+			Str("stored_secret", clientData.Secret).
+			Str("provided_secret", req.ClientSecret).
+			Bool("match", clientData.Secret == req.ClientSecret).
+			Msg("[DEBUG] RefreshToken: client secret comparison")
+		if req.ClientSecret != "" && clientData.Secret != req.ClientSecret {
+			span.SetStatus(codes.Error, "Invalid client secret")
+			utility.Logger.Warn().Str("client_id", req.ClientID).Msg("RefreshToken: client secret mismatch")
+			return nil, fmt.Errorf("invalid_request")
+		}
+	}
+
+	decryptedRefreshToken, err := s.encryption.Decrypt(req.RefreshToken)
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "Failed to decrypt refresh token")
