@@ -23,7 +23,8 @@ Janus solves this by encrypting every IdP JWT into an **opaque bearer token** us
 ### Standards Compliance
 
 - **OAuth 2.1 + PKCE** -- authorization code flow with S256 code challenge
-- **RFC 7591** -- dynamic client registration
+- **RFC 7591** -- dynamic client registration with complete §3.2.1 response (metadata echo-back, `client_id_issued_at`, `client_secret_expires_at`)
+- **RFC 8414** -- OAuth 2.0 Authorization Server Metadata (`.well-known/oauth-authorization-server`)
 - **RFC 9728** -- protected resource metadata including `bearer_methods_supported: ["header"]`
 - **OpenID Connect Discovery** -- `.well-known/openid-configuration` endpoint
 
@@ -119,7 +120,7 @@ See [docs/testing-guide.md](docs/testing-guide.md) for the full end-to-end test 
 
 ### Opaque token flow
 
-1. **Register** -- client calls `POST /register` with redirect URIs. Proxy returns an AEAD-encrypted `client_id` and `client_secret`.
+1. **Register** -- client calls `POST /register` with redirect URIs. Proxy returns an AEAD-encrypted `client_id` and `client_secret` plus a full RFC 7591 §3.2.1 response (metadata echo-back, `client_id_issued_at`, `client_secret_expires_at`).
 2. **Authorize** -- client redirects to `GET /auth` with PKCE `code_challenge`. Proxy redirects to the IdP.
 3. **Callback** -- IdP redirects back to `GET /callback`. Proxy receives the authorization code from the IdP.
 4. **Token exchange** -- client calls `POST /token` with `code_verifier`. Proxy exchanges the code with the IdP, receives a real JWT, encrypts it with AES-256-GCM, and returns the opaque bearer to the client.
@@ -211,6 +212,7 @@ See [.env.example](.env.example) for all supported variables.
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/.well-known/openid-configuration` | OpenID Connect discovery |
+| `GET` | `/.well-known/oauth-authorization-server` | Authorization server metadata (RFC 8414) |
 | `GET` | `/.well-known/oauth-protected-resource` | Protected resource metadata (RFC 9728) |
 | `POST` | `/register` | Dynamic client registration (RFC 7591) |
 | `GET` | `/auth` | OAuth authorization initiation (with PKCE) |
@@ -267,6 +269,23 @@ docker-compose -f docker-compose.observability.yaml up -d
 docker-compose -f docker-compose.yaml -f docker-compose.observability.yaml up -d
 ```
 
+## Deployment
+
+The `deploy.sh` script builds, tags, pushes the Docker image, updates the Helm values file, and deploys in one step:
+
+```bash
+export REGISTRY=myregistry.azurecr.io   # required
+export HELM_NAMESPACE=my-namespace       # optional, defaults to "default"
+./deploy.sh <version>                    # e.g. ./deploy.sh 1.0.21
+```
+
+It performs these steps in order:
+
+1. `task docker:build` -- builds the `mcp-janus:latest` image
+2. Tags and pushes `$REGISTRY/mcp-janus:<version>`
+3. Updates `image.tag` in `deployment/values-dev.yaml`
+4. `helm upgrade -i -f deployment/values-dev.yaml mcp-janus ./.helm --namespace $HELM_NAMESPACE`
+
 ## Contributing
 
 1. Fork the repo and create a feature branch
@@ -288,6 +307,7 @@ docker-compose -f docker-compose.yaml -f docker-compose.observability.yaml up -d
 - [OAuth 2.1 (IETF Draft)](https://datatracker.ietf.org/doc/html/draft-ietf-oauth-v2-1-13)
 - [RFC 7591: Dynamic Client Registration](https://datatracker.ietf.org/doc/html/rfc7591)
 - [RFC 8414: Authorization Server Metadata](https://datatracker.ietf.org/doc/html/rfc8414)
+- [MCP Authorization (2025-11-25)](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization)
 - [RFC 9728: Protected Resource Metadata](https://datatracker.ietf.org/doc/html/rfc9728)
 - [RFC 8707: Resource Indicators](https://datatracker.ietf.org/doc/html/rfc8707)
 
