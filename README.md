@@ -24,7 +24,7 @@ Janus solves this by encrypting every IdP JWT into an **opaque bearer token** us
 
 - **OAuth 2.1 + PKCE** -- authorization code flow with S256 code challenge
 - **RFC 7591** -- dynamic client registration
-- **RFC 9728** -- protected resource metadata for discovery
+- **RFC 9728** -- protected resource metadata including `bearer_methods_supported: ["header"]`
 - **OpenID Connect Discovery** -- `.well-known/openid-configuration` endpoint
 
 ### Operations
@@ -34,6 +34,7 @@ Janus solves this by encrypting every IdP JWT into an **opaque bearer token** us
 - **Structured logging** -- JSON logs, configurable level, no secrets in output
 - **Graceful shutdown** -- clean connection draining on SIGTERM
 - **Single binary** -- `go build` produces one static binary, no runtime dependencies
+- **CORS support** -- opt-in for browser-based MCP clients (e.g. MCP Inspector); configurable allowed origins, methods, and headers; preflight requests bypass auth middleware
 
 ## Architecture
 
@@ -158,6 +159,10 @@ proxy:
   listen_addr: ":8080"                   # Listen address
   log_level: info                        # trace|debug|info|warn|error|fatal|panic
   log_format: json                       # json
+  cors:
+    enabled: false                       # set to true for browser-based clients (e.g. MCP Inspector)
+    allowed_origins:
+      - http://localhost:6274            # MCP Inspector default origin
 
 idp:
   client_id: your-idp-client-id         # OAuth client ID at the IdP
@@ -196,6 +201,7 @@ Environment variable overrides use the `MCP_` prefix with underscores for nestin
 export MCP_IDP_CLIENT_SECRET="your-secret"
 export MCP_PROXY_BASE_URL="https://proxy.example.com"
 export MCP_ENCRYPTION_MASTER_KEY="$(openssl rand -hex 32)"
+export MCP_PROXY_CORS_ENABLED=true          # enable CORS (configure origins in config.yaml)
 ```
 
 See [.env.example](.env.example) for all supported variables.

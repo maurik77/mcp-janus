@@ -30,6 +30,16 @@ type IDP struct {
 	FetchRetryDelay        time.Duration     `mapstructure:"fetch_retry_delay"`
 }
 
+type CORS struct {
+	Enabled          bool          `mapstructure:"enabled"`
+	AllowedOrigins   []string      `mapstructure:"allowed_origins"`
+	AllowedMethods   []string      `mapstructure:"allowed_methods"`
+	AllowedHeaders   []string      `mapstructure:"allowed_headers"`
+	ExposedHeaders   []string      `mapstructure:"exposed_headers"`
+	AllowCredentials bool          `mapstructure:"allow_credentials"`
+	MaxAge           time.Duration `mapstructure:"max_age"`
+}
+
 type Proxy struct {
 	Issuer      string `mapstructure:"issuer"`
 	BaseURL     string `mapstructure:"base_url"`
@@ -40,6 +50,7 @@ type Proxy struct {
 	TLSKeyFile  string `mapstructure:"tls_key_file"`
 	LogLevel    string `mapstructure:"log_level"`
 	LogFormat   string `mapstructure:"log_format"`
+	CORS        CORS   `mapstructure:"cors"`
 }
 
 type Telemetry struct {
@@ -135,6 +146,10 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	err = viper.BindEnv("proxy.cors.enabled", "MCP_PROXY_CORS_ENABLED")
+	if err != nil {
+		return nil, err
+	}
 	if err := viper.ReadInConfig(); err != nil {
 		return nil, err
 	}
@@ -148,6 +163,16 @@ func Load() (*Config, error) {
 	viper.SetDefault("proxy.log_level", "error")
 	viper.SetDefault("proxy.log_format", "json")
 	viper.SetDefault("idp.skip_tls_verify", false)
+
+	viper.SetDefault("proxy.cors.enabled", false)
+	viper.SetDefault("proxy.cors.allowed_methods",
+		[]string{"GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"})
+	viper.SetDefault("proxy.cors.allowed_headers",
+		[]string{"Authorization", "Content-Type", "Accept",
+			"Mcp-Session-Id", "Mcp-Protocol-Version", "x-custom-auth-headers"})
+	viper.SetDefault("proxy.cors.exposed_headers",
+		[]string{"WWW-Authenticate", "Mcp-Session-Id"})
+	viper.SetDefault("proxy.cors.max_age", 12*time.Hour)
 
 	viper.SetDefault("idp.fetch_retry_attempts", 3)
 	viper.SetDefault("idp.fetch_retry_delay", "2s")
