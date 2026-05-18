@@ -1,0 +1,212 @@
+# MCP Janus — OAuth 2.1 REST Client
+# VS Code REST Client extension (humao.rest-client)
+#
+# WORKFLOW:
+#   1. Health check
+#   2. Discovery endpoints
+#   3. POST /register  →  copy client_id + client_secret into variables below
+#   4. Build the /auth URL manually (PKCE flow — browser redirect required)
+#   5. After callback, copy the auth code → POST /token
+#   6. Copy opaque access_token + refresh_token into variables below
+#   7. POST /refresh  →  use new tokens
+#   8. GET/POST /mcp/* with the opaque bearer
+
+# ─────────────────────────────────────────────
+# Variables — edit these before running
+# ─────────────────────────────────────────────
+
+@baseUrl        = http://localhost:8080
+@redirectUri    = http://localhost:3000/callback
+
+# Populated automatically from the /register response (see @name register)
+@clientId       = {{register.response.body.$.client_id}}
+@clientSecret   = {{register.response.body.$.client_secret}}
+
+# Filled in after the IdP redirects back to your redirect_uri
+@authCode       = PASTE_AUTH_CODE_HERE
+
+# PKCE values — generate once per flow
+# Generate with: openssl rand -base64 32 | tr -d '=' | tr '+/' '-_'
+@codeVerifier   = PASTE_CODE_VERIFIER_HERE
+# SHA-256 of codeVerifier, base64url-encoded (no padding)
+# Generate with: echo -n "$codeVerifier" | openssl dgst -sha256 -binary | base64 | tr '+/' '-_' | tr -d '='
+@codeChallenge  = PASTE_CODE_CHALLENGE_HERE
+
+# State value (any random string)
+@state          = random-state-abc123
+
+# Filled in after /token or /refresh
+@accessToken    = PASTE_OPAQUE_ACCESS_TOKEN_HERE
+@refreshToken   = PASTE_OPAQUE_REFRESH_TOKEN_HERE
+
+
+###############################################################################
+# 1. HEALTH CHECK
+###############################################################################
+
+# @name health
+GET {{baseUrl}}/health
+
+
+###############################################################################
+# 2. DISCOVERY ENDPOINTS
+###############################################################################
+
+### OpenID Connect Discovery
+# @name openidConfig
+GET {{baseUrl}}/.well-known/openid-configuration
+Accept: application/json
+
+###
+
+### OAuth 2.0 Authorization Server Metadata (RFC 8414)
+# @name authServerMetadata
+GET {{baseUrl}}/.well-known/oauth-authorization-server
+Accept: application/json
+
+###
+
+### Protected Resource Metadata (RFC 9728)
+# @name protectedResource
+GET {{baseUrl}}/.well-known/oauth-protected-resource
+Accept: application/json
+
+
+###############################################################################
+# 3. DYNAMIC CLIENT REGISTRATION (RFC 7591)
+#    → copy client_id and client_secret from the response into @clientId / @clientSecret above
+###############################################################################
+
+# @name register
+POST {{baseUrl}}/register
+Content-Type: application/json
+
+{
+  "client_name": "REST Client Test",
+  "redirect_uris": ["{{redirectUri}}"],
+  "grant_types": ["authorization_code", "refresh_token"],
+  "response_types": ["code"],
+  "token_endpoint_auth_method": "none"
+}
+
+
+###############################################################################
+# 4. AUTHORIZATION URL (open in browser — PKCE redirect flow)
+#
+#    Generate PKCE pair first:
+#      code_verifier:  openssl rand -base64 32 | tr -d '=' | tr '+/' '-_'
+#      code_challenge: echo -n "$cv" | openssl dgst -sha256 -binary | base64 | tr '+/' '-_' | tr -d '='
+#
+#    Then open this URL in a browser.  The IdP will redirect back to your
+#    redirect_uri with ?code=...&state=... — copy the code into @authCode above.
+#
+# @name authUrl
+GET {{baseUrl}}/auth?client_id={{clientId}}&redirect_uri={{redirectUri}}&response_type=code&state={{state}}&code_challenge={{codeChallenge}}&code_challenge_method=S256
+Accept: text/html
+
+
+###############################################################################
+# 5. TOKEN EXCHANGE — auth code → opaque bearer (public client, no secret)
+#    → copy access_token and refresh_token into @accessToken / @refreshToken above
+###############################################################################
+
+# @name tokenExchange
+POST {{baseUrl}}/token
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=authorization_code&code={{authCode}}&redirect_uri={{redirectUri}}&client_id={{clientId}}&code_verifier={{codeVerifier}}
+
+###
+
+### TOKEN EXCHANGE — confidential client (with client_secret)
+# @name tokenExchangeConfidential
+POST {{baseUrl}}/token
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=authorization_code&code={{authCode}}&redirect_uri={{redirectUri}}&client_id={{clientId}}&client_secret={{clientSecret}}&code_verifier={{codeVerifier}}
+
+
+###############################################################################
+# 6. REFRESH TOKEN
+###############################################################################
+
+### Refresh — public client (no client_id / client_secret)
+# @name refresh
+POST {{baseUrl}}/refresh
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=refresh_token&refresh_token={{refreshToken}}
+
+###
+
+### Refresh — with client_id (optional, for confidential clients)
+# @name refreshConfidential
+POST {{baseUrl}}/refresh
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=refresh_token&refresh_token={{refreshToken}}&client_id={{clientId}}&client_secret={{clientSecret}}
+
+###
+
+### Refresh — wrong grant_type (expect 400 unsupported_grant_type)
+# @name refreshWrongGrant
+POST {{baseUrl}}/refresh
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=authorization_code&refresh_token={{refreshToken}}
+
+
+###############################################################################
+# 7. AUTHENTICATED MCP REQUESTS
+###############################################################################
+
+### MCP GET (SSE stream or JSON-RPC)
+# @name mcpGet
+GET {{baseUrl}}/mcp
+Authorization: Bearer {{accessToken}}
+Accept: application/json, text/event-stream
+
+###
+
+### MCP POST — JSON-RPC initialize
+# @name mcpInitialize
+POST {{baseUrl}}/mcp
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "initialize",
+  "params": {
+    "protocolVersion": "2024-11-05",
+    "capabilities": {},
+    "clientInfo": {
+      "name": "rest-client-test",
+      "version": "1.0.0"
+    }
+  }
+}
+
+###
+
+### MCP POST — list tools
+# @name mcpListTools
+POST {{baseUrl}}/mcp
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "method": "tools/list",
+  "params": {}
+}
+
+###
+
+### MCP — expired / bad token (expect 401)
+# @name mcpBadToken
+GET {{baseUrl}}/mcp
+Authorization: Bearer this-is-not-a-valid-opaque-token
+Accept: application/json
