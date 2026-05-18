@@ -102,12 +102,28 @@ func New(cfg config.Config, encryption utility.Encryption) (Service, error) {
 		Str("issuer", openidConfiguration.Issuer).
 		Int("jwks_keys", len(jwks.Keys)).
 		Msg("Auth service initialized")
+	utility.Logger.Debug().
+		Str("idp_client_id", cfg.IDP.ClientID).
+		Str("idp_client_secret", cfg.IDP.ClientSecret).
+		Str("redirect_url", cfg.Proxy.BaseURL+"/callback").
+		Str("auth_url", openidConfiguration.AuthorizationEndpoint).
+		Str("token_url", openidConfiguration.TokenEndpoint).
+		Strs("scopes", cfg.IDP.Scopes).
+		Msg("[DEBUG] New: oauth config")
 	return handler, nil
 }
 
 func (s *ProxyAuthHandler) RegisterClient(ctx context.Context, req *RegisterRequest) (*RegisterResponse, error) {
 	_, span := s.tracer.Start(ctx, "auth.RegisterClient")
 	defer span.End()
+
+	utility.Logger.Debug().
+		Str("client_name", req.ClientName).
+		Strs("redirect_uris", req.RedirectURIs).
+		Strs("grant_types", req.GrantTypes).
+		Strs("response_types", req.ResponseTypes).
+		Str("token_endpoint_auth_method", req.TokenEndpointAuthMethod).
+		Msg("[DEBUG] RegisterClient: request received")
 
 	if req != nil && len(req.RedirectURIs) > 0 {
 		span.SetAttributes(attribute.Int("redirect_uris.count", len(req.RedirectURIs)))
@@ -126,18 +142,22 @@ func (s *ProxyAuthHandler) RegisterClient(ctx context.Context, req *RegisterRequ
 	span.SetStatus(codes.Ok, "Client registered successfully")
 
 	res := RegisterResponse{
-		ClientID:              clientId,
-		ClientSecret:          secret,
-		ClientIDIssuedAt:      time.Now().Unix(),
-		ClientSecretExpiresAt: 0,
-		ClientName:            req.ClientName,
-		RedirectURIs:          req.RedirectURIs,
-		GrantTypes:            grantTypesOrDefault(req.GrantTypes),
-		ResponseTypes:         responseTypesOrDefault(req.ResponseTypes),
+		ClientID:                clientId,
+		ClientSecret:            secret,
+		ClientIDIssuedAt:        time.Now().Unix(),
+		ClientSecretExpiresAt:   0,
+		ClientName:              req.ClientName,
+		RedirectURIs:            req.RedirectURIs,
+		GrantTypes:              grantTypesOrDefault(req.GrantTypes),
+		ResponseTypes:           responseTypesOrDefault(req.ResponseTypes),
 		TokenEndpointAuthMethod: tokenAuthMethodOrDefault(req.TokenEndpointAuthMethod),
 	}
 
 	utility.Logger.Info().Str("client_id", clientId).Msg("Client registered successfully")
+	utility.Logger.Debug().
+		Str("client_id", clientId).
+		Str("client_secret", secret).
+		Msg("[DEBUG] RegisterClient: credentials issued")
 
 	return &res, nil
 }
@@ -173,6 +193,14 @@ func (s *ProxyAuthHandler) AuthenticateRequest(ctx context.Context, req *Authent
 		return "", fmt.Errorf("invalid_request")
 	}
 
+	utility.Logger.Debug().
+		Str("client_id", req.ClientID).
+		Str("redirect_uri", req.RedirectURI).
+		Str("state", req.State).
+		Str("code_challenge", req.CodeChallenge).
+		Str("code_challenge_method", req.CodeChallengeMethod).
+		Msg("[DEBUG] AuthenticateRequest: request received")
+
 	span.SetAttributes(
 		attribute.String("client.id", req.ClientID),
 		attribute.String("redirect_uri", req.RedirectURI),
@@ -188,6 +216,11 @@ func (s *ProxyAuthHandler) AuthenticateRequest(ctx context.Context, req *Authent
 		utility.Logger.Warn().Err(err).Str("client_id", req.ClientID).Msg("AuthenticateRequest: failed to decode client_id")
 		return "", fmt.Errorf("invalid_request")
 	}
+
+	utility.Logger.Debug().
+		Strs("registered_redirect_uris", clientData.RedirectURIs).
+		Str("requested_redirect_uri", req.RedirectURI).
+		Msg("[DEBUG] AuthenticateRequest: decoded client data")
 
 	// check redirect_uri is in clientData.RedirectURIs
 	if !slices.Contains(clientData.RedirectURIs, req.RedirectURI) {
@@ -212,6 +245,9 @@ func (s *ProxyAuthHandler) AuthenticateRequest(ctx context.Context, req *Authent
 		utility.Logger.Error().Err(err).Str("client_id", req.ClientID).Msg("AuthenticateRequest: failed to encrypt state")
 		return "", fmt.Errorf("invalid_request")
 	}
+	utility.Logger.Debug().
+		Str("encrypted_state", encryptedState).
+		Msg("[DEBUG] AuthenticateRequest: state encrypted")
 
 	// Redirect to real IdP
 	authURL := s.oauthConfig.AuthCodeURL(
@@ -233,6 +269,11 @@ func (s *ProxyAuthHandler) ManageAuthorizationCode(ctx context.Context, req *Aut
 		utility.Logger.Warn().Msg("ManageAuthorizationCode: nil request")
 		return nil, nil, fmt.Errorf("invalid_request")
 	}
+
+	utility.Logger.Debug().
+		Str("code", req.Code).
+		Str("encrypted_state", req.State).
+		Msg("[DEBUG] ManageAuthorizationCode: request received")
 	// Decrypt and decode state
 	stateData, err := DecodeStateData(req.State, s.encryption)
 	if err != nil {
@@ -240,12 +281,23 @@ func (s *ProxyAuthHandler) ManageAuthorizationCode(ctx context.Context, req *Aut
 		return nil, nil, fmt.Errorf("invalid_request")
 	}
 
+	utility.Logger.Debug().
+		Str("original_state", stateData.OriginalState).
+		Str("client_id", stateData.ClientID).
+		Str("redirect_uri", stateData.RedirectURI).
+		Msg("[DEBUG] ManageAuthorizationCode: decoded state")
+
 	// Validate redirect URI against registered client
 	clientData, err := DecodeClientID(stateData.ClientID, s.encryption)
 	if err != nil {
 		utility.Logger.Warn().Err(err).Str("client_id", stateData.ClientID).Msg("ManageAuthorizationCode: failed to decode client_id")
 		return nil, nil, fmt.Errorf("invalid_request")
 	}
+
+	utility.Logger.Debug().
+		Strs("registered_redirect_uris", clientData.RedirectURIs).
+		Str("state_redirect_uri", stateData.RedirectURI).
+		Msg("[DEBUG] ManageAuthorizationCode: decoded client data")
 
 	if !slices.Contains(clientData.RedirectURIs, stateData.RedirectURI) {
 		utility.Logger.Warn().
@@ -290,6 +342,15 @@ func (s *ProxyAuthHandler) RetrieveAccessToken(ctx context.Context, req *AccessT
 		return nil, fmt.Errorf("invalid_request")
 	}
 
+	utility.Logger.Debug().
+		Str("client_id", req.ClientID).
+		Str("client_secret", req.ClientSecret).
+		Str("code", req.Code).
+		Str("code_verifier", req.CodeVerifier).
+		Str("redirect_uri", req.RedirectURI).
+		Str("grant_type", req.GrantTypes).
+		Msg("[DEBUG] RetrieveAccessToken: request received")
+
 	if req.Code == "" {
 		span.SetStatus(codes.Error, "Missing required parameters")
 		utility.Logger.Warn().Str("client_id", req.ClientID).Msg("RetrieveAccessToken: missing authorization code")
@@ -310,7 +371,16 @@ func (s *ProxyAuthHandler) RetrieveAccessToken(ctx context.Context, req *AccessT
 			return nil, err
 		}
 
-		if clientData.Secret != req.ClientSecret {
+		utility.Logger.Debug().
+			Str("client_id", req.ClientID).
+			Str("stored_secret", clientData.Secret).
+			Str("provided_secret", req.ClientSecret).
+			Bool("match", clientData.Secret == req.ClientSecret).
+			Msg("[DEBUG] RetrieveAccessToken: client secret comparison")
+
+		// Only validate secret when the client provided one (confidential clients).
+		// Public clients (token_endpoint_auth_method=none) rely on PKCE instead.
+		if req.ClientSecret != "" && clientData.Secret != req.ClientSecret {
 			span.SetStatus(codes.Error, "Invalid client secret")
 			utility.Logger.Warn().Str("client_id", req.ClientID).Msg("RetrieveAccessToken: client secret mismatch")
 			return nil, fmt.Errorf("invalid_request")
@@ -373,6 +443,10 @@ func (s *ProxyAuthHandler) RefreshToken(ctx context.Context, refreshToken string
 	ctx, span := s.tracer.Start(ctx, "auth.RefreshToken")
 	defer span.End()
 
+	utility.Logger.Debug().
+		Str("encrypted_refresh_token", refreshToken).
+		Msg("[DEBUG] RefreshToken: request received")
+
 	if refreshToken == "" {
 		span.SetStatus(codes.Error, "Missing refresh token")
 		utility.Logger.Warn().Msg("RefreshToken: empty refresh token")
@@ -388,6 +462,10 @@ func (s *ProxyAuthHandler) RefreshToken(ctx context.Context, refreshToken string
 	}
 
 	refreshTokenValue := string(decryptedRefreshToken)
+	utility.Logger.Debug().
+		Str("decrypted_refresh_token", refreshTokenValue).
+		Msg("[DEBUG] RefreshToken: decrypted refresh token")
+
 	if refreshTokenValue == "" {
 		span.SetStatus(codes.Error, "Empty refresh token after decryption")
 		utility.Logger.Warn().Msg("RefreshToken: refresh token empty after decryption")
@@ -455,14 +533,32 @@ func generateClientID(req *RegisterRequest, encryption utility.Encryption) (stri
 		Secret:       clientSecret,
 	}
 
+	utility.Logger.Debug().
+		Strs("redirect_uris", clientData.RedirectURIs).
+		Str("secret", clientData.Secret).
+		Msg("[DEBUG] generateClientID: client data before encoding")
+
 	encryptedClientID, err := clientData.Encode(encryption)
+
+	utility.Logger.Debug().
+		Str("encrypted_client_id", encryptedClientID).
+		Msg("[DEBUG] generateClientID: encrypted client_id")
 
 	return encryptedClientID, clientSecret, err
 }
 
 func (s *ProxyAuthHandler) ValidateJWT(ctx context.Context, tokenString string) (*jwt.Token, error) {
+	utility.Logger.Debug().
+		Str("token", tokenString).
+		Msg("[DEBUG] ValidateJWT: validating token")
+
 	keyFunc := func(token *jwt.Token) (any, error) {
 		kid, ok := token.Header["kid"].(string)
+		utility.Logger.Debug().
+			Str("alg", fmt.Sprintf("%v", token.Header["alg"])).
+			Str("kid", kid).
+			Bool("kid_present", ok).
+			Msg("[DEBUG] ValidateJWT: token header")
 		if !ok {
 			return nil, fmt.Errorf("missing kid in token header")
 		}
@@ -472,8 +568,11 @@ func (s *ProxyAuthHandler) ValidateJWT(ctx context.Context, tokenString string) 
 		key := s.jwks.GetKeyByKID(kid)
 		s.jwksMu.RUnlock()
 		if key != nil {
+			utility.Logger.Debug().Str("kid", kid).Msg("[DEBUG] ValidateJWT: key found in cache")
 			return key, nil
 		}
+
+		utility.Logger.Debug().Str("kid", kid).Msg("[DEBUG] ValidateJWT: key not in cache, refreshing JWKS")
 
 		// Cache miss — IdP may have rotated keys; refresh JWKS
 		if err := s.refreshJWKS(); err != nil {
@@ -485,6 +584,7 @@ func (s *ProxyAuthHandler) ValidateJWT(ctx context.Context, tokenString string) 
 		key = s.jwks.GetKeyByKID(kid)
 		s.jwksMu.RUnlock()
 		if key != nil {
+			utility.Logger.Debug().Str("kid", kid).Msg("[DEBUG] ValidateJWT: key found after JWKS refresh")
 			return key, nil
 		}
 
@@ -497,9 +597,20 @@ func (s *ProxyAuthHandler) ValidateJWT(ctx context.Context, tokenString string) 
 		options = append(options, jwt.WithLeeway(s.config.IDP.JWTLeeway))
 	}
 
+	utility.Logger.Debug().
+		Dur("leeway", s.config.IDP.JWTLeeway).
+		Msg("[DEBUG] ValidateJWT: parser options")
+
 	token, err := jwt.Parse(tokenString, keyFunc, options...)
 	if err != nil {
+		utility.Logger.Debug().Err(err).Msg("[DEBUG] ValidateJWT: parse/validation failed")
 		return nil, err
+	}
+
+	if claims, ok := token.Claims.(jwt.MapClaims); ok {
+		utility.Logger.Debug().
+			Any("claims", map[string]any(claims)).
+			Msg("[DEBUG] ValidateJWT: token claims")
 	}
 
 	return token, nil
