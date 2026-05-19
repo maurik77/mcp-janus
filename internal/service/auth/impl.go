@@ -117,16 +117,17 @@ func (s *ProxyAuthHandler) RegisterClient(ctx context.Context, req *RegisterRequ
 	_, span := s.tracer.Start(ctx, "auth.RegisterClient")
 	defer span.End()
 
-	utility.Logger.Debug().
-		Str("client_name", req.ClientName).
-		Strs("redirect_uris", req.RedirectURIs).
-		Strs("grant_types", req.GrantTypes).
-		Strs("response_types", req.ResponseTypes).
-		Str("token_endpoint_auth_method", req.TokenEndpointAuthMethod).
-		Msg("[DEBUG] RegisterClient: request received")
-
-	if req != nil && len(req.RedirectURIs) > 0 {
-		span.SetAttributes(attribute.Int("redirect_uris.count", len(req.RedirectURIs)))
+	if req != nil {
+		utility.Logger.Debug().
+			Str("client_name", req.ClientName).
+			Strs("redirect_uris", req.RedirectURIs).
+			Strs("grant_types", req.GrantTypes).
+			Strs("response_types", req.ResponseTypes).
+			Str("token_endpoint_auth_method", req.TokenEndpointAuthMethod).
+			Msg("[DEBUG] RegisterClient: request received")
+		if len(req.RedirectURIs) > 0 {
+			span.SetAttributes(attribute.Int("redirect_uris.count", len(req.RedirectURIs)))
+		}
 	}
 
 	clientId, secret, err := generateClientID(req, s.encryption)
