@@ -2,12 +2,14 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"mcpproxy/internal/infrastructure/config"
 	"mcpproxy/internal/service/auth"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
@@ -354,6 +356,116 @@ func TestAuthMiddleware_Success(t *testing.T) {
 	// Real token should be in context
 	realToken := capturedRequest.Context().Value(keyRealToken)
 	assert.Equal(t, "opaque-token", realToken)
+}
+
+func makeSelfIssuedBlob(t *testing.T, expiresAt int64, claims map[string]string) []byte {
+	t.Helper()
+	si := auth.SelfIssuedTokenData{
+		Type:      "si",
+		IssuedAt:  time.Now().Add(-time.Hour).Unix(),
+		ExpiresAt: expiresAt,
+		Claims:    claims,
+	}
+	b, err := json.Marshal(si)
+	require.NoError(t, err)
+	return b
+}
+
+func TestAuthMiddleware_SelfIssuedToken_Valid(t *testing.T) {
+	metaSvc := new(mockMetadataService)
+	enc := new(mockEncryption)
+
+	siBlob := makeSelfIssuedBlob(t, time.Now().Add(23*time.Hour).Unix(),
+		map[string]string{"X-Sub": "user-123", "X-Email": "user@example.com"})
+	enc.On("Decrypt", "opaque-si-token").Return(siBlob, nil)
+
+	cfg := config.Config{
+		Upstream: config.Upstream{BaseURL: "http://localhost:8081"},
+		IDP: config.IDP{
+			FixedHeaders: map[string]string{"X-Tenant": "test-tenant"},
+		},
+	}
+	p, err := NewProxy(cfg, metaSvc, nil, enc)
+	require.NoError(t, err)
+
+	var capturedReq *http.Request
+	middleware := p.AuthMiddleware()
+	handler := middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedReq = r
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest("GET", "/mcp/test", nil)
+	req.Header.Set("Authorization", "Bearer opaque-si-token")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	require.NotNil(t, capturedReq)
+	assert.Equal(t, "user-123", capturedReq.Header.Get("X-Sub"))
+	assert.Equal(t, "user@example.com", capturedReq.Header.Get("X-Email"))
+	assert.Equal(t, "test-tenant", capturedReq.Header.Get("X-Tenant"))
+	assert.Equal(t, "opaque-si-token", capturedReq.Context().Value(keyRealToken))
+}
+
+func TestAuthMiddleware_SelfIssuedToken_Expired(t *testing.T) {
+	metaSvc := new(mockMetadataService)
+	enc := new(mockEncryption)
+
+	siBlob := makeSelfIssuedBlob(t, time.Now().Add(-time.Hour).Unix(), // expired
+		map[string]string{"X-Sub": "user-123"})
+	enc.On("Decrypt", "expired-si-token").Return(siBlob, nil)
+
+	cfg := config.Config{
+		Upstream: config.Upstream{BaseURL: "http://localhost:8081"},
+	}
+	p, err := NewProxy(cfg, metaSvc, nil, enc)
+	require.NoError(t, err)
+
+	middleware := p.AuthMiddleware()
+	handler := middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("next handler must not be called for expired token")
+	}))
+
+	req := httptest.NewRequest("GET", "/mcp/test", nil)
+	req.Header.Set("Authorization", "Bearer expired-si-token")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	assert.Contains(t, rec.Body.String(), "invalid_token")
+}
+
+func TestAuthMiddleware_SelfIssuedToken_WrongDiscriminator_FallsBackToJWT(t *testing.T) {
+	metaSvc := new(mockMetadataService)
+	metaSvc.On("WWWAuthenticateHeader").Return("Bearer")
+	enc := new(mockEncryption)
+
+	// JSON with wrong type discriminator — falls through to JWT validation path
+	wrongBlob, _ := json.Marshal(map[string]any{"t": "other", "exp": 9999999999, "iat": 1000, "cl": map[string]string{}})
+	enc.On("Decrypt", "wrong-type-token").Return(wrongBlob, nil)
+
+	authSvc := new(mockAuthService)
+	authSvc.On("ValidateJWT", mock.Anything, string(wrongBlob)).Return((*jwt.Token)(nil), assert.AnError)
+
+	cfg := config.Config{
+		Upstream: config.Upstream{BaseURL: "http://localhost:8081"},
+	}
+	p, err := NewProxy(cfg, metaSvc, authSvc, enc)
+	require.NoError(t, err)
+
+	middleware := p.AuthMiddleware()
+	handler := middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("next handler must not be called when JWT validation fails")
+	}))
+
+	req := httptest.NewRequest("GET", "/mcp/test", nil)
+	req.Header.Set("Authorization", "Bearer wrong-type-token")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	assert.Contains(t, rec.Body.String(), "invalid_token")
 }
 
 func TestAuthMiddleware_InvalidBearerFormat(t *testing.T) {

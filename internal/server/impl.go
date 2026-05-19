@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"mcpproxy/internal/infrastructure/config"
 	"mcpproxy/internal/service/auth"
@@ -11,6 +12,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	"go.opentelemetry.io/otel"
@@ -116,6 +118,28 @@ func (p *proxy) AuthMiddleware() func(http.Handler) http.Handler {
 			}
 
 			span.AddEvent("Token decrypted")
+
+			// Detect self-issued token by discriminator field "t":"si"
+			var si auth.SelfIssuedTokenData
+			if jsonErr := json.Unmarshal(data, &si); jsonErr == nil && si.Type == "si" {
+				if time.Now().Unix() > si.ExpiresAt {
+					utility.Logger.Warn().Str("remote_addr", r.RemoteAddr).Msg("AuthMiddleware: self-issued token expired")
+					span.SetStatus(codes.Error, "Self-issued token expired")
+					http.Error(w, `{"error":"invalid_token"}`, http.StatusUnauthorized)
+					return
+				}
+				for header, value := range si.Claims {
+					r.Header.Set(header, value)
+				}
+				for header, value := range p.cfg.IDP.FixedHeaders {
+					r.Header.Set(header, value)
+				}
+				ctx = context.WithValue(ctx, keyRealToken, token)
+				span.AddEvent("Self-issued token validated")
+				span.SetStatus(codes.Ok, "Authentication successful")
+				next.ServeHTTP(w, r.WithContext(ctx))
+				return
+			}
 
 			jwtToken, err := p.auth.ValidateJWT(ctx, string(data))
 			if err != nil || !jwtToken.Valid {

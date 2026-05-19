@@ -89,6 +89,40 @@ func DecodeClientID(encrypted string, encryption utility.Encryption) (*ClientIdD
 	return &cid, nil
 }
 
+type SelfIssuedTokenData struct {
+	Type      string            `json:"t"`
+	ExpiresAt int64             `json:"exp"`
+	IssuedAt  int64             `json:"iat"`
+	Claims    map[string]string `json:"cl"`
+}
+
+func (s *SelfIssuedTokenData) Encode(encryption utility.Encryption) (string, error) {
+	data, err := json.Marshal(s)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal self-issued token: %w", err)
+	}
+	encrypted, err := encryption.Encrypt(data)
+	if err != nil {
+		return "", fmt.Errorf("failed to encrypt self-issued token: %w", err)
+	}
+	return encrypted, nil
+}
+
+func DecodeSelfIssuedToken(encrypted string, encryption utility.Encryption) (*SelfIssuedTokenData, error) {
+	data, err := encryption.Decrypt(encrypted)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decrypt self-issued token: %w", err)
+	}
+	var si SelfIssuedTokenData
+	if err := json.Unmarshal(data, &si); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal self-issued token: %w", err)
+	}
+	if si.Type != "si" {
+		return nil, fmt.Errorf("not a self-issued token")
+	}
+	return &si, nil
+}
+
 type StateData struct {
 	OriginalState string `json:"s"`
 	RedirectURI   string `json:"r"`

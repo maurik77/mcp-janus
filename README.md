@@ -19,6 +19,7 @@ Janus solves this by encrypting every IdP JWT into an **opaque bearer token** us
 - **JWT validation** -- full claim validation (expiry, audience, issuer) with JWKS key fetching
 - **Claims-to-headers mapping** -- configurable IdP claim injection into upstream HTTP headers
 - **Encrypted client credentials** -- dynamic registration returns AEAD-encrypted `client_id` / `client_secret`
+- **Self-issued token mode** -- Janus can issue its own long-lived tokens (configurable TTL) embedding encrypted claims; no IdP call per request and no refresh needed — designed for MCP clients like Claude and ChatGPT that do not support token refresh
 
 ### Standards Compliance
 
@@ -127,6 +128,39 @@ See [docs/testing-guide.md](docs/testing-guide.md) for the full end-to-end test 
 5. **Authenticated requests** -- client sends `Authorization: Bearer <opaque>` to `GET/POST /mcp/*`. Proxy decrypts, validates the JWT, maps claims to headers, and forwards with the real token.
 6. **Refresh** -- client calls `POST /refresh` with the encrypted refresh token. Proxy decrypts, refreshes with the IdP, re-encrypts, and returns a new opaque bearer.
 
+### Self-issued token mode (`token_behavior: self_issued`)
+
+Some MCP clients (Claude, ChatGPT) complete the OAuth flow once and never call `/refresh`. With the default `proxy` mode, sessions expire when the IdP token expires (typically 1 hour). The `self_issued` mode solves this:
+
+1. After the initial IdP exchange, the JWT is validated **once** and claims are extracted and mapped.
+2. Janus issues its own opaque token containing the **encrypted mapped claims** and a Janus-controlled expiry (`token_ttl`).
+3. On every subsequent request the proxy decrypts the token, checks the expiry, and injects the claims as headers — **no JWKS call, no IdP contact**.
+4. If `/refresh` is called (by clients that do support it), a new access token is issued from the same encrypted claims up to the `token_max_ttl` ceiling without contacting the IdP.
+
+```text
+MCP Client                        MCP Janus Proxy                    Upstream MCP Server
+    │                                    │                                    │
+    │  Authorization: Bearer <opaque>    │                                    │
+    │ ──────────────────────────────────>│                                    │
+    │                                    │ 1. Decrypt opaque token (AES-GCM)  │
+    │                                    │ 2. Check expiry (local, no IdP)    │
+    │                                    │ 3. Inject pre-mapped claim headers │
+    │                                    │                                    │
+    │                                    │  Authorization: Bearer <opaque>    │
+    │                                    │  X-Sub: user123                    │
+    │                                    │ ──────────────────────────────────>│
+```
+
+**Trade-offs vs `proxy` mode:**
+
+| | `proxy` | `self_issued` |
+|---|---|---|
+| Token lifetime | IdP-controlled (e.g. 1h) | Janus-controlled (e.g. 720h) |
+| IdP revocation effective within | ~1h | up to `token_ttl` |
+| JWKS call per request | yes (cached) | no |
+| Claims freshness | every request | frozen at login time |
+| Clients without refresh support | session expires hourly | full `token_ttl` duration |
+
 ### Token encryption detail
 
 - **Algorithm**: AES-256-GCM (AEAD -- authenticated encryption with associated data)
@@ -164,6 +198,9 @@ proxy:
     enabled: false                       # set to true for browser-based clients (e.g. MCP Inspector)
     allowed_origins:
       - http://localhost:6274            # MCP Inspector default origin
+  token_behavior: proxy                  # proxy (default) | self_issued
+  token_ttl: 24h                         # [self_issued] lifetime of each access token
+  token_max_ttl: 168h                    # [self_issued] max window from original login; refresh denied after this
 
 idp:
   client_id: your-idp-client-id         # OAuth client ID at the IdP
@@ -203,6 +240,9 @@ export MCP_IDP_CLIENT_SECRET="your-secret"
 export MCP_PROXY_BASE_URL="https://proxy.example.com"
 export MCP_ENCRYPTION_MASTER_KEY="$(openssl rand -hex 32)"
 export MCP_PROXY_CORS_ENABLED=true          # enable CORS (configure origins in config.yaml)
+export MCP_TOKEN_BEHAVIOR=self_issued       # enable self-issued token mode
+export MCP_TOKEN_TTL=720h                   # 30-day token lifetime
+export MCP_TOKEN_MAX_TTL=720h               # matching max window
 ```
 
 See [.env.example](.env.example) for all supported variables.

@@ -695,6 +695,215 @@ func TestRetrieveAccessToken(t *testing.T) {
 	})
 }
 
+// --- TestRetrieveAccessToken_SelfIssued ---
+
+func TestRetrieveAccessToken_SelfIssued(t *testing.T) {
+	rsaKey := testRSAKey(t)
+	kid := "test-kid"
+	jwkKey := rsaPublicKeyToJWK(&rsaKey.PublicKey, kid)
+
+	makeSelfIssuedHandler := func(ts *httptest.Server, claimsMapping map[string]string, ttl, maxTTL time.Duration) *ProxyAuthHandler {
+		return &ProxyAuthHandler{
+			config: config.Config{
+				Proxy: config.Proxy{
+					TokenBehavior: config.TokenBehaviorSelfIssued,
+					TokenTTL:      ttl,
+					TokenMaxTTL:   maxTTL,
+				},
+				IDP: config.IDP{ClaimsMapping: claimsMapping},
+			},
+			oauthConfig: &oauth2.Config{
+				ClientID: "test-client",
+				Endpoint: oauth2.Endpoint{TokenURL: ts.URL, AuthStyle: oauth2.AuthStyleInParams},
+			},
+			jwks:       &JWKS{Keys: []JWK{jwkKey}},
+			encryption: &mockEncryption{},
+			tracer:     otel.Tracer("test"),
+		}
+	}
+
+	signedJWT := func(sub, email string) string {
+		return signTestJWT(t, rsaKey, kid, jwt.MapClaims{
+			"sub":   sub,
+			"email": email,
+			"exp":   time.Now().Add(time.Hour).Unix(),
+			"iat":   time.Now().Unix(),
+		})
+	}
+
+	t.Run("success: tokens are SelfIssuedTokenData", func(t *testing.T) {
+		idpJWT := signedJWT("user-123", "user@example.com")
+		ts := httptest.NewServer(tokenHandler(idpJWT, "idp-refresh-unused", http.StatusOK))
+		defer ts.Close()
+
+		handler := makeSelfIssuedHandler(ts, map[string]string{
+			"sub":   "X-Sub",
+			"email": "X-Email",
+		}, 24*time.Hour, 7*24*time.Hour)
+
+		token, err := handler.RetrieveAccessToken(context.Background(), &AccessTokenRequest{
+			Code:       "auth-code",
+			GrantTypes: "authorization_code",
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "Bearer", token.TokenType)
+
+		// Decode access token via mockEncryption (strips "encrypted_" prefix)
+		atJSON := token.AccessToken[len("encrypted_"):]
+		var at SelfIssuedTokenData
+		require.NoError(t, json.Unmarshal([]byte(atJSON), &at))
+		assert.Equal(t, "si", at.Type)
+		assert.Equal(t, "user-123", at.Claims["X-Sub"])
+		assert.Equal(t, "user@example.com", at.Claims["X-Email"])
+		assert.Greater(t, at.ExpiresAt, time.Now().Unix())
+
+		// Decode refresh token
+		rtJSON := token.RefreshToken[len("encrypted_"):]
+		var rt SelfIssuedTokenData
+		require.NoError(t, json.Unmarshal([]byte(rtJSON), &rt))
+		assert.Equal(t, "si", rt.Type)
+		assert.Greater(t, rt.ExpiresAt, at.ExpiresAt)
+	})
+
+	t.Run("access token expiry matches TokenTTL", func(t *testing.T) {
+		idpJWT := signedJWT("user-abc", "")
+		ts := httptest.NewServer(tokenHandler(idpJWT, "idp-refresh", http.StatusOK))
+		defer ts.Close()
+
+		handler := makeSelfIssuedHandler(ts, nil, 6*time.Hour, 48*time.Hour)
+
+		before := time.Now()
+		token, err := handler.RetrieveAccessToken(context.Background(), &AccessTokenRequest{Code: "code"})
+		require.NoError(t, err)
+
+		assert.WithinDuration(t, before.Add(6*time.Hour), token.Expiry, 5*time.Second)
+
+		atJSON := token.AccessToken[len("encrypted_"):]
+		var at SelfIssuedTokenData
+		require.NoError(t, json.Unmarshal([]byte(atJSON), &at))
+		assert.InDelta(t, before.Add(6*time.Hour).Unix(), at.ExpiresAt, 5)
+	})
+
+	t.Run("invalid IdP JWT fails validation", func(t *testing.T) {
+		ts := httptest.NewServer(tokenHandler("this-is-not-a-jwt", "ignored", http.StatusOK))
+		defer ts.Close()
+
+		handler := makeSelfIssuedHandler(ts, nil, 24*time.Hour, 7*24*time.Hour)
+
+		_, err := handler.RetrieveAccessToken(context.Background(), &AccessTokenRequest{Code: "code"})
+		assert.Error(t, err)
+	})
+}
+
+// --- TestRefreshToken_SelfIssued ---
+
+func TestRefreshToken_SelfIssued(t *testing.T) {
+	makeSelfIssuedRefreshToken := func(issuedAt, expiresAt int64, claims map[string]string) string {
+		data := &SelfIssuedTokenData{
+			Type:      "si",
+			IssuedAt:  issuedAt,
+			ExpiresAt: expiresAt,
+			Claims:    claims,
+		}
+		b, _ := json.Marshal(data)
+		return "encrypted_" + string(b)
+	}
+
+	t.Run("valid refresh: new access token, refresh unchanged", func(t *testing.T) {
+		now := time.Now()
+		encRT := makeSelfIssuedRefreshToken(
+			now.Add(-time.Hour).Unix(),
+			now.Add(6*24*time.Hour).Unix(),
+			map[string]string{"X-Sub": "user-123"},
+		)
+
+		handler := &ProxyAuthHandler{
+			config: config.Config{
+				Proxy: config.Proxy{TokenBehavior: config.TokenBehaviorSelfIssued, TokenTTL: 24 * time.Hour},
+			},
+			encryption: &mockEncryption{},
+			tracer:     otel.Tracer("test"),
+		}
+
+		token, err := handler.RefreshToken(context.Background(), &RefreshTokenRequest{RefreshToken: encRT})
+		require.NoError(t, err)
+
+		// Refresh token returned unchanged
+		assert.Equal(t, encRT, token.RefreshToken)
+
+		// New access token is a valid SelfIssuedTokenData
+		atJSON := token.AccessToken[len("encrypted_"):]
+		var at SelfIssuedTokenData
+		require.NoError(t, json.Unmarshal([]byte(atJSON), &at))
+		assert.Equal(t, "si", at.Type)
+		assert.Equal(t, "user-123", at.Claims["X-Sub"])
+		// Original iat preserved
+		assert.Equal(t, now.Add(-time.Hour).Unix(), at.IssuedAt)
+	})
+
+	t.Run("refresh token expired returns invalid_grant", func(t *testing.T) {
+		now := time.Now()
+		encRT := makeSelfIssuedRefreshToken(
+			now.Add(-8*24*time.Hour).Unix(),
+			now.Add(-time.Hour).Unix(), // expired
+			map[string]string{"X-Sub": "user-123"},
+		)
+
+		handler := &ProxyAuthHandler{
+			config: config.Config{
+				Proxy: config.Proxy{TokenBehavior: config.TokenBehaviorSelfIssued, TokenTTL: 24 * time.Hour},
+			},
+			encryption: &mockEncryption{},
+			tracer:     otel.Tracer("test"),
+		}
+
+		_, err := handler.RefreshToken(context.Background(), &RefreshTokenRequest{RefreshToken: encRT})
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid_grant")
+	})
+
+	t.Run("access token capped at MaxTTL ceiling", func(t *testing.T) {
+		now := time.Now()
+		ceiling := now.Add(2 * time.Hour).Unix() // only 2h left before MaxTTL
+		encRT := makeSelfIssuedRefreshToken(
+			now.Add(-6*24*time.Hour).Unix(),
+			ceiling,
+			map[string]string{"X-Sub": "user-123"},
+		)
+
+		handler := &ProxyAuthHandler{
+			config: config.Config{
+				Proxy: config.Proxy{TokenBehavior: config.TokenBehaviorSelfIssued, TokenTTL: 24 * time.Hour}, // TTL > remaining
+			},
+			encryption: &mockEncryption{},
+			tracer:     otel.Tracer("test"),
+		}
+
+		token, err := handler.RefreshToken(context.Background(), &RefreshTokenRequest{RefreshToken: encRT})
+		require.NoError(t, err)
+
+		atJSON := token.AccessToken[len("encrypted_"):]
+		var at SelfIssuedTokenData
+		require.NoError(t, json.Unmarshal([]byte(atJSON), &at))
+		assert.Equal(t, ceiling, at.ExpiresAt) // capped to MaxTTL ceiling
+	})
+
+	t.Run("non self-issued refresh token returns invalid_grant", func(t *testing.T) {
+		handler := &ProxyAuthHandler{
+			config: config.Config{
+				Proxy: config.Proxy{TokenBehavior: config.TokenBehaviorSelfIssued, TokenTTL: 24 * time.Hour},
+			},
+			// mockEncryption strips prefix: "encrypted_idp-jwt" → "idp-jwt" → not valid JSON
+			encryption: &mockEncryption{},
+			tracer:     otel.Tracer("test"),
+		}
+
+		_, err := handler.RefreshToken(context.Background(), &RefreshTokenRequest{RefreshToken: "encrypted_idp-jwt"})
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid_grant")
+	})
+}
+
 // --- TestRefreshToken ---
 
 func TestRefreshToken(t *testing.T) {

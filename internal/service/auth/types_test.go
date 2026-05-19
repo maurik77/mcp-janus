@@ -507,6 +507,219 @@ func TestStateData_RoundTrip(t *testing.T) {
 	}
 }
 
+func TestSelfIssuedTokenData_Encode(t *testing.T) {
+	tests := []struct {
+		name    string
+		data    *SelfIssuedTokenData
+		mockEnc utility.Encryption
+		wantErr bool
+		errMsg  string
+	}{
+		{
+			name: "successful encoding",
+			data: &SelfIssuedTokenData{
+				Type:      "si",
+				IssuedAt:  1000,
+				ExpiresAt: 2000,
+				Claims:    map[string]string{"X-Sub": "user-123"},
+			},
+			mockEnc: &mockEncryption{},
+			wantErr: false,
+		},
+		{
+			name: "empty claims",
+			data: &SelfIssuedTokenData{
+				Type:      "si",
+				IssuedAt:  1000,
+				ExpiresAt: 2000,
+				Claims:    map[string]string{},
+			},
+			mockEnc: &mockEncryption{},
+			wantErr: false,
+		},
+		{
+			name: "encryption fails",
+			data: &SelfIssuedTokenData{
+				Type:      "si",
+				IssuedAt:  1000,
+				ExpiresAt: 2000,
+				Claims:    map[string]string{"X-Sub": "user-123"},
+			},
+			mockEnc: &mockEncryption{
+				encryptFunc: func(data []byte) (string, error) {
+					return "", &mockEncryptionError{"encryption failed"}
+				},
+			},
+			wantErr: true,
+			errMsg:  "encryption failed",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := tt.data.Encode(tt.mockEnc)
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("expected error containing %q, got nil", tt.errMsg)
+				} else if tt.errMsg != "" && !containsString(err.Error(), tt.errMsg) {
+					t.Errorf("expected error containing %q, got %q", tt.errMsg, err.Error())
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if result == "" {
+				t.Error("expected non-empty encoded result")
+			}
+		})
+	}
+}
+
+func TestDecodeSelfIssuedToken(t *testing.T) {
+	tests := []struct {
+		name      string
+		buildEnc  func() (string, utility.Encryption)
+		wantErr   bool
+		errMsg    string
+		checkData func(*testing.T, *SelfIssuedTokenData)
+	}{
+		{
+			name: "successful decode",
+			buildEnc: func() (string, utility.Encryption) {
+				enc := &mockEncryption{}
+				data := &SelfIssuedTokenData{
+					Type:      "si",
+					IssuedAt:  1000,
+					ExpiresAt: 2000,
+					Claims:    map[string]string{"X-Sub": "user-123", "X-Email": "a@b.com"},
+				}
+				encoded, _ := data.Encode(enc)
+				return encoded, enc
+			},
+			wantErr: false,
+			checkData: func(t *testing.T, si *SelfIssuedTokenData) {
+				if si.Type != "si" {
+					t.Errorf("Type: got %q want %q", si.Type, "si")
+				}
+				if si.IssuedAt != 1000 {
+					t.Errorf("IssuedAt: got %d want 1000", si.IssuedAt)
+				}
+				if si.ExpiresAt != 2000 {
+					t.Errorf("ExpiresAt: got %d want 2000", si.ExpiresAt)
+				}
+				if si.Claims["X-Sub"] != "user-123" {
+					t.Errorf("Claims[X-Sub]: got %q want %q", si.Claims["X-Sub"], "user-123")
+				}
+			},
+		},
+		{
+			name: "decryption fails",
+			buildEnc: func() (string, utility.Encryption) {
+				enc := &mockEncryption{
+					decryptFunc: func(string) ([]byte, error) {
+						return nil, &mockEncryptionError{"decrypt error"}
+					},
+				}
+				return "any-value", enc
+			},
+			wantErr: true,
+			errMsg:  "decrypt error",
+		},
+		{
+			name: "wrong type discriminator",
+			buildEnc: func() (string, utility.Encryption) {
+				enc := &mockEncryption{}
+				// Manually encode a blob with wrong type
+				encoded := "encrypted_" + `{"t":"proxy","exp":2000,"iat":1000,"cl":{}}`
+				return encoded, enc
+			},
+			wantErr: true,
+			errMsg:  "not a self-issued token",
+		},
+		{
+			name: "invalid JSON",
+			buildEnc: func() (string, utility.Encryption) {
+				enc := &mockEncryption{}
+				return "encrypted_not-json-at-all", enc
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			encoded, enc := tt.buildEnc()
+			result, err := DecodeSelfIssuedToken(encoded, enc)
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("expected error containing %q, got nil", tt.errMsg)
+				} else if tt.errMsg != "" && !containsString(err.Error(), tt.errMsg) {
+					t.Errorf("expected error containing %q, got %q", tt.errMsg, err.Error())
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if tt.checkData != nil {
+				tt.checkData(t, result)
+			}
+		})
+	}
+}
+
+func TestSelfIssuedTokenData_RoundTrip(t *testing.T) {
+	enc := &mockEncryption{}
+	original := &SelfIssuedTokenData{
+		Type:      "si",
+		IssuedAt:  1700000000,
+		ExpiresAt: 1700086400,
+		Claims: map[string]string{
+			"X-Sub":   "user-abc",
+			"X-Email": "user@example.com",
+			"X-Tenant": "acme",
+		},
+	}
+
+	encoded, err := original.Encode(enc)
+	if err != nil {
+		t.Fatalf("Encode() error: %v", err)
+	}
+
+	decoded, err := DecodeSelfIssuedToken(encoded, enc)
+	if err != nil {
+		t.Fatalf("DecodeSelfIssuedToken() error: %v", err)
+	}
+
+	if decoded.Type != original.Type {
+		t.Errorf("Type mismatch: %q vs %q", decoded.Type, original.Type)
+	}
+	if decoded.IssuedAt != original.IssuedAt {
+		t.Errorf("IssuedAt mismatch: %d vs %d", decoded.IssuedAt, original.IssuedAt)
+	}
+	if decoded.ExpiresAt != original.ExpiresAt {
+		t.Errorf("ExpiresAt mismatch: %d vs %d", decoded.ExpiresAt, original.ExpiresAt)
+	}
+	for k, v := range original.Claims {
+		if decoded.Claims[k] != v {
+			t.Errorf("Claims[%s]: got %q want %q", k, decoded.Claims[k], v)
+		}
+	}
+}
+
+func containsString(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
+		func() bool {
+			for i := 0; i <= len(s)-len(substr); i++ {
+				if s[i:i+len(substr)] == substr {
+					return true
+				}
+			}
+			return false
+		}())
+}
+
 // mockEncryptionError is a custom error type for testing
 type mockEncryptionError struct {
 	msg string

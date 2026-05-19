@@ -40,17 +40,27 @@ type CORS struct {
 	MaxAge           time.Duration `mapstructure:"max_age"`
 }
 
+type TokenBehavior string
+
+const (
+	TokenBehaviorProxy      TokenBehavior = "proxy"
+	TokenBehaviorSelfIssued TokenBehavior = "self_issued"
+)
+
 type Proxy struct {
-	Issuer      string `mapstructure:"issuer"`
-	BaseURL     string `mapstructure:"base_url"`
-	ListenAddr  string `mapstructure:"listen_addr"`
-	ProbeAddr   string `mapstructure:"probe_addr"`
-	TLS         bool   `mapstructure:"tls"`
-	TLSCertFile string `mapstructure:"tls_cert_file"`
-	TLSKeyFile  string `mapstructure:"tls_key_file"`
-	LogLevel    string `mapstructure:"log_level"`
-	LogFormat   string `mapstructure:"log_format"`
-	CORS        CORS   `mapstructure:"cors"`
+	Issuer        string        `mapstructure:"issuer"`
+	BaseURL       string        `mapstructure:"base_url"`
+	ListenAddr    string        `mapstructure:"listen_addr"`
+	ProbeAddr     string        `mapstructure:"probe_addr"`
+	TLS           bool          `mapstructure:"tls"`
+	TLSCertFile   string        `mapstructure:"tls_cert_file"`
+	TLSKeyFile    string        `mapstructure:"tls_key_file"`
+	LogLevel      string        `mapstructure:"log_level"`
+	LogFormat     string        `mapstructure:"log_format"`
+	CORS          CORS          `mapstructure:"cors"`
+	TokenBehavior TokenBehavior `mapstructure:"token_behavior"`
+	TokenTTL      time.Duration `mapstructure:"token_ttl"`
+	TokenMaxTTL   time.Duration `mapstructure:"token_max_ttl"`
 }
 
 type Telemetry struct {
@@ -150,6 +160,18 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	err = viper.BindEnv("proxy.token_behavior", "MCP_TOKEN_BEHAVIOR")
+	if err != nil {
+		return nil, err
+	}
+	err = viper.BindEnv("proxy.token_ttl", "MCP_TOKEN_TTL")
+	if err != nil {
+		return nil, err
+	}
+	err = viper.BindEnv("proxy.token_max_ttl", "MCP_TOKEN_MAX_TTL")
+	if err != nil {
+		return nil, err
+	}
 	if err := viper.ReadInConfig(); err != nil {
 		return nil, err
 	}
@@ -176,6 +198,10 @@ func Load() (*Config, error) {
 
 	viper.SetDefault("idp.fetch_retry_attempts", 3)
 	viper.SetDefault("idp.fetch_retry_delay", "2s")
+
+	viper.SetDefault("proxy.token_behavior", TokenBehaviorProxy)
+	viper.SetDefault("proxy.token_ttl", 24*time.Hour)
+	viper.SetDefault("proxy.token_max_ttl", 7*24*time.Hour)
 
 	if err := viper.ReadInConfig(); err != nil {
 		return nil, err

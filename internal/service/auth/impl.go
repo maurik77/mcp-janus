@@ -409,6 +409,17 @@ func (s *ProxyAuthHandler) RetrieveAccessToken(ctx context.Context, req *AccessT
 
 	span.AddEvent("Token received from IdP")
 
+	if s.config.Proxy.TokenBehavior == config.TokenBehaviorSelfIssued {
+		result, siErr := s.issueSelfIssuedTokens(ctx, token)
+		if siErr != nil {
+			span.RecordError(siErr)
+			span.SetStatus(codes.Error, "Failed to issue self-issued token")
+			return nil, siErr
+		}
+		span.SetStatus(codes.Ok, "Self-issued token exchange successful")
+		return result, nil
+	}
+
 	opaqueToken := token
 	opaqueToken.AccessToken, err = s.encryption.Encrypt([]byte(token.AccessToken))
 
@@ -481,6 +492,17 @@ func (s *ProxyAuthHandler) RefreshToken(ctx context.Context, req *RefreshTokenRe
 			utility.Logger.Warn().Str("client_id", req.ClientID).Msg("RefreshToken: client secret mismatch")
 			return nil, fmt.Errorf("invalid_request")
 		}
+	}
+
+	if s.config.Proxy.TokenBehavior == config.TokenBehaviorSelfIssued {
+		result, siErr := s.refreshSelfIssuedToken(req)
+		if siErr != nil {
+			span.RecordError(siErr)
+			span.SetStatus(codes.Error, "Self-issued refresh failed")
+			return nil, siErr
+		}
+		span.SetStatus(codes.Ok, "Self-issued token refreshed")
+		return result, nil
 	}
 
 	decryptedRefreshToken, err := s.encryption.Decrypt(req.RefreshToken)
@@ -644,6 +666,119 @@ func (s *ProxyAuthHandler) ValidateJWT(ctx context.Context, tokenString string) 
 	}
 
 	return token, nil
+}
+
+// issueSelfIssuedTokens validates the IdP JWT once, extracts mapped claims,
+// and creates a pair of AES-256-GCM opaque tokens with a Janus-controlled TTL.
+func (s *ProxyAuthHandler) issueSelfIssuedTokens(ctx context.Context, idpToken *oauth2.Token) (*oauth2.Token, error) {
+	jwtToken, err := s.ValidateJWT(ctx, idpToken.AccessToken)
+	if err != nil || !jwtToken.Valid {
+		utility.Logger.Warn().Err(err).Msg("issueSelfIssuedTokens: IdP JWT validation failed")
+		return nil, fmt.Errorf("invalid_request")
+	}
+
+	claims, ok := jwtToken.Claims.(jwt.MapClaims)
+	if !ok {
+		utility.Logger.Warn().Msg("issueSelfIssuedTokens: failed to parse JWT claims as MapClaims")
+		return nil, fmt.Errorf("invalid_request")
+	}
+
+	mappedClaims := make(map[string]string)
+	for source, dest := range s.config.IDP.ClaimsMapping {
+		if value, exists := claims[source]; exists {
+			if strValue, ok := value.(string); ok {
+				mappedClaims[dest] = strValue
+			}
+		}
+	}
+
+	now := time.Now()
+	ttl := s.config.Proxy.TokenTTL
+	if ttl <= 0 {
+		ttl = 24 * time.Hour
+	}
+	maxTTL := s.config.Proxy.TokenMaxTTL
+	if maxTTL <= 0 {
+		maxTTL = 7 * 24 * time.Hour
+	}
+
+	atData := &SelfIssuedTokenData{
+		Type:      "si",
+		IssuedAt:  now.Unix(),
+		ExpiresAt: now.Add(ttl).Unix(),
+		Claims:    mappedClaims,
+	}
+	rtData := &SelfIssuedTokenData{
+		Type:      "si",
+		IssuedAt:  now.Unix(),
+		ExpiresAt: now.Add(maxTTL).Unix(),
+		Claims:    mappedClaims,
+	}
+
+	encAT, err := atData.Encode(s.encryption)
+	if err != nil {
+		utility.Logger.Error().Err(err).Msg("issueSelfIssuedTokens: failed to encrypt access token")
+		return nil, err
+	}
+	encRT, err := rtData.Encode(s.encryption)
+	if err != nil {
+		utility.Logger.Error().Err(err).Msg("issueSelfIssuedTokens: failed to encrypt refresh token")
+		return nil, err
+	}
+
+	utility.Logger.Info().Time("expiry", now.Add(ttl)).Msg("Self-issued access token issued")
+
+	return &oauth2.Token{
+		AccessToken:  encAT,
+		RefreshToken: encRT,
+		TokenType:    "Bearer",
+		Expiry:       now.Add(ttl),
+	}, nil
+}
+
+// refreshSelfIssuedToken re-issues the access token from a self-issued refresh token
+// without contacting the IdP. The refresh token is returned unchanged (it is immutable).
+func (s *ProxyAuthHandler) refreshSelfIssuedToken(req *RefreshTokenRequest) (*oauth2.Token, error) {
+	si, err := DecodeSelfIssuedToken(req.RefreshToken, s.encryption)
+	if err != nil {
+		utility.Logger.Warn().Err(err).Msg("refreshSelfIssuedToken: failed to decode refresh token")
+		return nil, fmt.Errorf("invalid_grant")
+	}
+
+	now := time.Now()
+	if now.Unix() >= si.ExpiresAt {
+		utility.Logger.Warn().Msg("refreshSelfIssuedToken: refresh token expired")
+		return nil, fmt.Errorf("invalid_grant")
+	}
+
+	ttl := s.config.Proxy.TokenTTL
+	if ttl <= 0 {
+		ttl = 24 * time.Hour
+	}
+
+	newExpAt := min(now.Add(ttl).Unix(), si.ExpiresAt)
+
+	newAT := &SelfIssuedTokenData{
+		Type:      "si",
+		IssuedAt:  si.IssuedAt,
+		ExpiresAt: newExpAt,
+		Claims:    si.Claims,
+	}
+
+	encAT, err := newAT.Encode(s.encryption)
+	if err != nil {
+		utility.Logger.Error().Err(err).Msg("refreshSelfIssuedToken: failed to encrypt new access token")
+		return nil, err
+	}
+
+	utility.Logger.Info().Time("expiry", time.Unix(newExpAt, 0)).Msg("Self-issued token refreshed")
+
+	return &oauth2.Token{
+		AccessToken:  encAT,
+		RefreshToken: req.RefreshToken,
+		TokenType:    "Bearer",
+		Expiry:       time.Unix(newExpAt, 0),
+	}, nil
 }
 
 // refreshJWKS re-fetches the JWKS from the IdP.
