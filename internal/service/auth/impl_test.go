@@ -1191,7 +1191,7 @@ func TestIssueSelfIssuedTokens_ClaimsMapping(t *testing.T) {
 				},
 			},
 		},
-		jwks: &JWKS{Keys: []JWK{rsaPublicKeyToJWK(&rsaKey.PublicKey, kid)}},
+		jwks:       &JWKS{Keys: []JWK{rsaPublicKeyToJWK(&rsaKey.PublicKey, kid)}},
 		encryption: &mockEncryption{},
 		tracer:     otel.Tracer("test"),
 	}

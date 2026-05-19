@@ -676,8 +676,8 @@ func TestSelfIssuedTokenData_RoundTrip(t *testing.T) {
 		IssuedAt:  1700000000,
 		ExpiresAt: 1700086400,
 		Claims: map[string]string{
-			"X-Sub":   "user-abc",
-			"X-Email": "user@example.com",
+			"X-Sub":    "user-abc",
+			"X-Email":  "user@example.com",
 			"X-Tenant": "acme",
 		},
 	}
