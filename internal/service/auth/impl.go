@@ -21,6 +21,12 @@ import (
 	"golang.org/x/oauth2"
 )
 
+const (
+	clientSecretSize   = 32
+	defaultTokenTTL    = 24 * time.Hour
+	defaultTokenMaxTTL = 7 * 24 * time.Hour
+)
+
 type ProxyAuthHandler struct {
 	config              config.Config
 	oauthConfig         *oauth2.Config
@@ -113,8 +119,8 @@ func New(cfg config.Config, encryption utility.Encryption) (Service, error) {
 	return handler, nil
 }
 
-func (s *ProxyAuthHandler) RegisterClient(ctx context.Context, req *RegisterRequest) (*RegisterResponse, error) {
-	_, span := s.tracer.Start(ctx, "auth.RegisterClient")
+func (h *ProxyAuthHandler) RegisterClient(ctx context.Context, req *RegisterRequest) (*RegisterResponse, error) {
+	_, span := h.tracer.Start(ctx, "auth.RegisterClient")
 	defer span.End()
 
 	if req != nil {
@@ -130,7 +136,7 @@ func (s *ProxyAuthHandler) RegisterClient(ctx context.Context, req *RegisterRequ
 		}
 	}
 
-	clientId, secret, err := generateClientID(req, s.encryption)
+	clientId, secret, err := generateClientID(req, h.encryption)
 
 	if err != nil {
 		span.RecordError(err)
@@ -184,8 +190,8 @@ func tokenAuthMethodOrDefault(v string) string {
 	return v
 }
 
-func (s *ProxyAuthHandler) AuthenticateRequest(ctx context.Context, req *AuthenticateRequest) (string, error) {
-	_, span := s.tracer.Start(ctx, "auth.AuthenticateRequest")
+func (h *ProxyAuthHandler) AuthenticateRequest(ctx context.Context, req *AuthenticateRequest) (string, error) {
+	_, span := h.tracer.Start(ctx, "auth.AuthenticateRequest")
 	defer span.End()
 
 	if req == nil || req.ClientID == "" {
@@ -208,9 +214,7 @@ func (s *ProxyAuthHandler) AuthenticateRequest(ctx context.Context, req *Authent
 		attribute.String("code_challenge_method", req.CodeChallengeMethod),
 	)
 
-	clientData, err := DecodeClientID(req.ClientID, s.encryption)
-
-	// Decrypt client_id to get redirect_uri
+	clientData, err := DecodeClientID(req.ClientID, h.encryption)
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "Failed to decode client ID")
@@ -223,7 +227,6 @@ func (s *ProxyAuthHandler) AuthenticateRequest(ctx context.Context, req *Authent
 		Str("requested_redirect_uri", req.RedirectURI).
 		Msg("[DEBUG] AuthenticateRequest: decoded client data")
 
-	// check redirect_uri is in clientData.RedirectURIs
 	if !slices.Contains(clientData.RedirectURIs, req.RedirectURI) {
 		span.SetStatus(codes.Error, "Invalid redirect URI")
 		utility.Logger.Warn().
@@ -239,7 +242,7 @@ func (s *ProxyAuthHandler) AuthenticateRequest(ctx context.Context, req *Authent
 		ClientID:      req.ClientID,
 	}
 
-	encryptedState, err := stateData.Encode(s.encryption)
+	encryptedState, err := stateData.Encode(h.encryption)
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "Failed to encrypt state")
@@ -250,12 +253,11 @@ func (s *ProxyAuthHandler) AuthenticateRequest(ctx context.Context, req *Authent
 		Str("encrypted_state", encryptedState).
 		Msg("[DEBUG] AuthenticateRequest: state encrypted")
 
-	// Redirect to real IdP
-	authURL := s.oauthConfig.AuthCodeURL(
+	authURL := h.oauthConfig.AuthCodeURL(
 		encryptedState,
 		oauth2.SetAuthURLParam("code_challenge", req.CodeChallenge),
 		oauth2.SetAuthURLParam("code_challenge_method", req.CodeChallengeMethod),
-		oauth2.SetAuthURLParam("redirect_uri", s.config.Proxy.BaseURL+"/callback"),
+		oauth2.SetAuthURLParam("redirect_uri", h.config.Proxy.BaseURL+"/callback"),
 	)
 
 	span.SetStatus(codes.Ok, "Authentication request successful")
@@ -265,7 +267,7 @@ func (s *ProxyAuthHandler) AuthenticateRequest(ctx context.Context, req *Authent
 	return authURL, nil
 }
 
-func (s *ProxyAuthHandler) ManageAuthorizationCode(ctx context.Context, req *AuthorizationCodeData) (*AuthorizationCodeData, *url.URL, error) {
+func (h *ProxyAuthHandler) ManageAuthorizationCode(ctx context.Context, req *AuthorizationCodeData) (*AuthorizationCodeData, *url.URL, error) {
 	if req == nil {
 		utility.Logger.Warn().Msg("ManageAuthorizationCode: nil request")
 		return nil, nil, fmt.Errorf("invalid_request")
@@ -275,8 +277,7 @@ func (s *ProxyAuthHandler) ManageAuthorizationCode(ctx context.Context, req *Aut
 		Str("code", req.Code).
 		Str("encrypted_state", req.State).
 		Msg("[DEBUG] ManageAuthorizationCode: request received")
-	// Decrypt and decode state
-	stateData, err := DecodeStateData(req.State, s.encryption)
+	stateData, err := DecodeStateData(req.State, h.encryption)
 	if err != nil {
 		utility.Logger.Warn().Err(err).Msg("ManageAuthorizationCode: failed to decode state")
 		return nil, nil, fmt.Errorf("invalid_request")
@@ -288,8 +289,7 @@ func (s *ProxyAuthHandler) ManageAuthorizationCode(ctx context.Context, req *Aut
 		Str("redirect_uri", stateData.RedirectURI).
 		Msg("[DEBUG] ManageAuthorizationCode: decoded state")
 
-	// Validate redirect URI against registered client
-	clientData, err := DecodeClientID(stateData.ClientID, s.encryption)
+	clientData, err := DecodeClientID(stateData.ClientID, h.encryption)
 	if err != nil {
 		utility.Logger.Warn().Err(err).Str("client_id", stateData.ClientID).Msg("ManageAuthorizationCode: failed to decode client_id")
 		return nil, nil, fmt.Errorf("invalid_request")
@@ -308,7 +308,6 @@ func (s *ProxyAuthHandler) ManageAuthorizationCode(ctx context.Context, req *Aut
 		return nil, nil, fmt.Errorf("invalid_request")
 	}
 
-	// Validate redirect URI is a well-formed absolute URL with http(s) scheme
 	redirectURL, err := url.Parse(stateData.RedirectURI)
 	if err != nil {
 		utility.Logger.Warn().Err(err).Str("redirect_uri", stateData.RedirectURI).Msg("ManageAuthorizationCode: invalid redirect_uri")
@@ -333,8 +332,8 @@ func (s *ProxyAuthHandler) ManageAuthorizationCode(ctx context.Context, req *Aut
 	return res, redirectURL, nil
 }
 
-func (s *ProxyAuthHandler) RetrieveAccessToken(ctx context.Context, req *AccessTokenRequest) (*oauth2.Token, error) {
-	ctx, span := s.tracer.Start(ctx, "auth.RetrieveAccessToken")
+func (h *ProxyAuthHandler) RetrieveAccessToken(ctx context.Context, req *AccessTokenRequest) (*oauth2.Token, error) {
+	ctx, span := h.tracer.Start(ctx, "auth.RetrieveAccessToken")
 	defer span.End()
 
 	if req == nil {
@@ -359,42 +358,24 @@ func (s *ProxyAuthHandler) RetrieveAccessToken(ctx context.Context, req *AccessT
 	}
 
 	if req.ClientID != "" {
-		span.SetAttributes(
-			attribute.String("client.id", req.ClientID),
-		)
-
-		clientData, err := DecodeClientID(req.ClientID, s.encryption)
-
-		if err != nil {
-			span.RecordError(err)
-			span.SetStatus(codes.Error, "Failed to decode client ID")
-			utility.Logger.Warn().Err(err).Str("client_id", req.ClientID).Msg("RetrieveAccessToken: failed to decode client_id")
-			return nil, err
-		}
-
-		utility.Logger.Debug().
-			Str("client_id", req.ClientID).
-			Str("stored_secret", clientData.Secret).
-			Str("provided_secret", req.ClientSecret).
-			Bool("match", clientData.Secret == req.ClientSecret).
-			Msg("[DEBUG] RetrieveAccessToken: client secret comparison")
-
+		span.SetAttributes(attribute.String("client.id", req.ClientID))
 		// Only validate secret when the client provided one (confidential clients).
 		// Public clients (token_endpoint_auth_method=none) rely on PKCE instead.
-		if req.ClientSecret != "" && clientData.Secret != req.ClientSecret {
-			span.SetStatus(codes.Error, "Invalid client secret")
-			utility.Logger.Warn().Str("client_id", req.ClientID).Msg("RetrieveAccessToken: client secret mismatch")
-			return nil, fmt.Errorf("invalid_request")
+		if err := h.validateClientCredentials(req.ClientID, req.ClientSecret); err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "Invalid client credentials")
+			utility.Logger.Warn().Str("client_id", req.ClientID).Msg("RetrieveAccessToken: invalid client credentials")
+			return nil, err
 		}
 	}
 
 	// Exchange with real IdP
-	httpClient := s.httpClient
+	httpClient := h.httpClient
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
 	oauthCtx := context.WithValue(ctx, oauth2.HTTPClient, httpClient)
-	token, err := s.oauthConfig.Exchange(
+	token, err := h.oauthConfig.Exchange(
 		oauthCtx,
 		req.Code,
 		oauth2.SetAuthURLParam("grant_type", req.GrantTypes),
@@ -410,8 +391,8 @@ func (s *ProxyAuthHandler) RetrieveAccessToken(ctx context.Context, req *AccessT
 
 	span.AddEvent("Token received from IdP")
 
-	if s.config.Proxy.TokenBehavior == config.TokenBehaviorSelfIssued {
-		result, siErr := s.issueSelfIssuedTokens(ctx, token)
+	if h.config.Proxy.TokenBehavior == config.TokenBehaviorSelfIssued {
+		result, siErr := h.issueSelfIssuedTokens(ctx, token)
 		if siErr != nil {
 			span.RecordError(siErr)
 			span.SetStatus(codes.Error, "Failed to issue self-issued token")
@@ -421,22 +402,11 @@ func (s *ProxyAuthHandler) RetrieveAccessToken(ctx context.Context, req *AccessT
 		return result, nil
 	}
 
-	opaqueToken := token
-	opaqueToken.AccessToken, err = s.encryption.Encrypt([]byte(token.AccessToken))
-
+	opaqueToken, err := h.encryptTokenPair(token)
 	if err != nil {
 		span.RecordError(err)
-		span.SetStatus(codes.Error, "Failed to encrypt access token")
-		utility.Logger.Error().Err(err).Str("client_id", req.ClientID).Msg("RetrieveAccessToken: failed to encrypt access token")
-		return nil, err
-	}
-
-	opaqueToken.RefreshToken, err = s.encryption.Encrypt([]byte(token.RefreshToken))
-
-	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, "Failed to encrypt refresh token")
-		utility.Logger.Error().Err(err).Str("client_id", req.ClientID).Msg("RetrieveAccessToken: failed to encrypt refresh token")
+		span.SetStatus(codes.Error, err.Error())
+		utility.Logger.Error().Err(err).Str("client_id", req.ClientID).Msg("RetrieveAccessToken: token encryption failed")
 		return nil, err
 	}
 
@@ -448,11 +418,11 @@ func (s *ProxyAuthHandler) RetrieveAccessToken(ctx context.Context, req *AccessT
 		Time("expiry", opaqueToken.Expiry).
 		Msg("Access token issued to client")
 
-	return opaqueToken, err
+	return opaqueToken, nil
 }
 
-func (s *ProxyAuthHandler) RefreshToken(ctx context.Context, req *RefreshTokenRequest) (*oauth2.Token, error) {
-	ctx, span := s.tracer.Start(ctx, "auth.RefreshToken")
+func (h *ProxyAuthHandler) RefreshToken(ctx context.Context, req *RefreshTokenRequest) (*oauth2.Token, error) {
+	ctx, span := h.tracer.Start(ctx, "auth.RefreshToken")
 	defer span.End()
 
 	if req == nil {
@@ -475,28 +445,18 @@ func (s *ProxyAuthHandler) RefreshToken(ctx context.Context, req *RefreshTokenRe
 	}
 
 	if req.ClientID != "" {
-		clientData, err := DecodeClientID(req.ClientID, s.encryption)
-		if err != nil {
+		// Only validate secret when the client provided one (confidential clients).
+		// Public clients (token_endpoint_auth_method=none) rely on PKCE instead.
+		if err := h.validateClientCredentials(req.ClientID, req.ClientSecret); err != nil {
 			span.RecordError(err)
-			span.SetStatus(codes.Error, "Failed to decode client ID")
-			utility.Logger.Warn().Err(err).Str("client_id", req.ClientID).Msg("RefreshToken: failed to decode client_id")
-			return nil, fmt.Errorf("invalid_request")
-		}
-		utility.Logger.Debug().
-			Str("client_id", req.ClientID).
-			Str("stored_secret", clientData.Secret).
-			Str("provided_secret", req.ClientSecret).
-			Bool("match", clientData.Secret == req.ClientSecret).
-			Msg("[DEBUG] RefreshToken: client secret comparison")
-		if req.ClientSecret != "" && clientData.Secret != req.ClientSecret {
-			span.SetStatus(codes.Error, "Invalid client secret")
-			utility.Logger.Warn().Str("client_id", req.ClientID).Msg("RefreshToken: client secret mismatch")
-			return nil, fmt.Errorf("invalid_request")
+			span.SetStatus(codes.Error, "Invalid client credentials")
+			utility.Logger.Warn().Str("client_id", req.ClientID).Msg("RefreshToken: invalid client credentials")
+			return nil, err
 		}
 	}
 
-	if s.config.Proxy.TokenBehavior == config.TokenBehaviorSelfIssued {
-		result, siErr := s.refreshSelfIssuedToken(req)
+	if h.config.Proxy.TokenBehavior == config.TokenBehaviorSelfIssued {
+		result, siErr := h.refreshSelfIssuedToken(req)
 		if siErr != nil {
 			span.RecordError(siErr)
 			span.SetStatus(codes.Error, "Self-issued refresh failed")
@@ -506,7 +466,7 @@ func (s *ProxyAuthHandler) RefreshToken(ctx context.Context, req *RefreshTokenRe
 		return result, nil
 	}
 
-	decryptedRefreshToken, err := s.encryption.Decrypt(req.RefreshToken)
+	decryptedRefreshToken, err := h.encryption.Decrypt(req.RefreshToken)
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "Failed to decrypt refresh token")
@@ -525,12 +485,12 @@ func (s *ProxyAuthHandler) RefreshToken(ctx context.Context, req *RefreshTokenRe
 		return nil, fmt.Errorf("invalid_request")
 	}
 
-	httpClient := s.httpClient
+	httpClient := h.httpClient
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
 	oauthCtx := context.WithValue(ctx, oauth2.HTTPClient, httpClient)
-	tokenSource := s.oauthConfig.TokenSource(oauthCtx, &oauth2.Token{
+	tokenSource := h.oauthConfig.TokenSource(oauthCtx, &oauth2.Token{
 		RefreshToken: refreshTokenValue,
 	})
 
@@ -548,20 +508,11 @@ func (s *ProxyAuthHandler) RefreshToken(ctx context.Context, req *RefreshTokenRe
 		token.RefreshToken = refreshTokenValue
 	}
 
-	opaqueToken := token
-	opaqueToken.AccessToken, err = s.encryption.Encrypt([]byte(token.AccessToken))
+	opaqueToken, err := h.encryptTokenPair(token)
 	if err != nil {
 		span.RecordError(err)
-		span.SetStatus(codes.Error, "Failed to encrypt access token")
-		utility.Logger.Error().Err(err).Msg("RefreshToken: failed to encrypt access token")
-		return nil, err
-	}
-
-	opaqueToken.RefreshToken, err = s.encryption.Encrypt([]byte(token.RefreshToken))
-	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, "Failed to encrypt refresh token")
-		utility.Logger.Error().Err(err).Msg("RefreshToken: failed to encrypt refresh token")
+		span.SetStatus(codes.Error, err.Error())
+		utility.Logger.Error().Err(err).Msg("RefreshToken: token encryption failed")
 		return nil, err
 	}
 
@@ -575,13 +526,13 @@ func (s *ProxyAuthHandler) RefreshToken(ctx context.Context, req *RefreshTokenRe
 }
 
 func generateClientID(req *RegisterRequest, encryption utility.Encryption) (string, string, error) {
-	secretBytes := make([]byte, 32)
+	secretBytes := make([]byte, clientSecretSize)
 	if _, err := rand.Read(secretBytes); err != nil {
 		return "", "", fmt.Errorf("failed to generate client secret: %w", err)
 	}
 	clientSecret := hex.EncodeToString(secretBytes)
 
-	clientData := ClientIdData{
+	clientData := ClientIDData{
 		RedirectURIs: req.RedirectURIs,
 		Secret:       clientSecret,
 	}
@@ -600,7 +551,44 @@ func generateClientID(req *RegisterRequest, encryption utility.Encryption) (stri
 	return encryptedClientID, clientSecret, err
 }
 
-func (s *ProxyAuthHandler) ValidateJWT(ctx context.Context, tokenString string) (*jwt.Token, error) {
+// validateClientCredentials decodes the opaque client_id and, when a secret is
+// provided, verifies it matches the stored value. Public clients (PKCE-only)
+// pass an empty clientSecret and skip the comparison.
+func (h *ProxyAuthHandler) validateClientCredentials(clientID, clientSecret string) error {
+	clientData, err := DecodeClientID(clientID, h.encryption)
+	if err != nil {
+		return fmt.Errorf("invalid_request")
+	}
+	utility.Logger.Debug().
+		Str("client_id", clientID).
+		Str("stored_secret", clientData.Secret).
+		Str("provided_secret", clientSecret).
+		Bool("match", clientData.Secret == clientSecret).
+		Msg("[DEBUG] validateClientCredentials: client secret comparison")
+	if clientSecret != "" && clientData.Secret != clientSecret {
+		return fmt.Errorf("invalid_request")
+	}
+	return nil
+}
+
+// encryptTokenPair returns a copy of token with AccessToken and RefreshToken
+// replaced by their AES-256-GCM opaque equivalents.
+func (h *ProxyAuthHandler) encryptTokenPair(token *oauth2.Token) (*oauth2.Token, error) {
+	encAT, err := h.encryption.Encrypt([]byte(token.AccessToken))
+	if err != nil {
+		return nil, fmt.Errorf("failed to encrypt access token: %w", err)
+	}
+	encRT, err := h.encryption.Encrypt([]byte(token.RefreshToken))
+	if err != nil {
+		return nil, fmt.Errorf("failed to encrypt refresh token: %w", err)
+	}
+	result := *token
+	result.AccessToken = encAT
+	result.RefreshToken = encRT
+	return &result, nil
+}
+
+func (h *ProxyAuthHandler) ValidateJWT(ctx context.Context, tokenString string) (*jwt.Token, error) {
 	utility.Logger.Debug().
 		Str("token", tokenString).
 		Msg("[DEBUG] ValidateJWT: validating token")
@@ -617,9 +605,9 @@ func (s *ProxyAuthHandler) ValidateJWT(ctx context.Context, tokenString string) 
 		}
 
 		// Try cached JWKS first
-		s.jwksMu.RLock()
-		key := s.jwks.GetKeyByKID(kid)
-		s.jwksMu.RUnlock()
+		h.jwksMu.RLock()
+		key := h.jwks.GetKeyByKID(kid)
+		h.jwksMu.RUnlock()
 		if key != nil {
 			utility.Logger.Debug().Str("kid", kid).Msg("[DEBUG] ValidateJWT: key found in cache")
 			return key, nil
@@ -628,14 +616,14 @@ func (s *ProxyAuthHandler) ValidateJWT(ctx context.Context, tokenString string) 
 		utility.Logger.Debug().Str("kid", kid).Msg("[DEBUG] ValidateJWT: key not in cache, refreshing JWKS")
 
 		// Cache miss — IdP may have rotated keys; refresh JWKS
-		if err := s.refreshJWKS(); err != nil {
+		if err := h.refreshJWKS(); err != nil {
 			utility.Logger.Warn().Err(err).Str("kid", kid).Msg("Failed to refresh JWKS")
 			return nil, fmt.Errorf("key not found and JWKS refresh failed: %w", err)
 		}
 
-		s.jwksMu.RLock()
-		key = s.jwks.GetKeyByKID(kid)
-		s.jwksMu.RUnlock()
+		h.jwksMu.RLock()
+		key = h.jwks.GetKeyByKID(kid)
+		h.jwksMu.RUnlock()
 		if key != nil {
 			utility.Logger.Debug().Str("kid", kid).Msg("[DEBUG] ValidateJWT: key found after JWKS refresh")
 			return key, nil
@@ -646,12 +634,12 @@ func (s *ProxyAuthHandler) ValidateJWT(ctx context.Context, tokenString string) 
 
 	options := []jwt.ParserOption{}
 
-	if s.config.IDP.JWTLeeway > 0 {
-		options = append(options, jwt.WithLeeway(s.config.IDP.JWTLeeway))
+	if h.config.IDP.JWTLeeway > 0 {
+		options = append(options, jwt.WithLeeway(h.config.IDP.JWTLeeway))
 	}
 
 	utility.Logger.Debug().
-		Dur("leeway", s.config.IDP.JWTLeeway).
+		Dur("leeway", h.config.IDP.JWTLeeway).
 		Msg("[DEBUG] ValidateJWT: parser options")
 
 	token, err := jwt.Parse(tokenString, keyFunc, options...)
@@ -671,8 +659,8 @@ func (s *ProxyAuthHandler) ValidateJWT(ctx context.Context, tokenString string) 
 
 // issueSelfIssuedTokens validates the IdP JWT once, extracts mapped claims,
 // and creates a pair of AES-256-GCM opaque tokens with a Janus-controlled TTL.
-func (s *ProxyAuthHandler) issueSelfIssuedTokens(ctx context.Context, idpToken *oauth2.Token) (*oauth2.Token, error) {
-	jwtToken, err := s.ValidateJWT(ctx, idpToken.AccessToken)
+func (h *ProxyAuthHandler) issueSelfIssuedTokens(ctx context.Context, idpToken *oauth2.Token) (*oauth2.Token, error) {
+	jwtToken, err := h.ValidateJWT(ctx, idpToken.AccessToken)
 	if err != nil || !jwtToken.Valid {
 		utility.Logger.Warn().Err(err).Msg("issueSelfIssuedTokens: IdP JWT validation failed")
 		return nil, fmt.Errorf("invalid_request")
@@ -685,7 +673,7 @@ func (s *ProxyAuthHandler) issueSelfIssuedTokens(ctx context.Context, idpToken *
 	}
 
 	mappedClaims := make(map[string]string)
-	for source, dest := range s.config.IDP.ClaimsMapping {
+	for source, dest := range h.config.IDP.ClaimsMapping {
 		if value, exists := claims[source]; exists {
 			if strValue, ok := value.(string); ok {
 				mappedClaims[dest] = strValue
@@ -694,13 +682,13 @@ func (s *ProxyAuthHandler) issueSelfIssuedTokens(ctx context.Context, idpToken *
 	}
 
 	now := time.Now()
-	ttl := s.config.Proxy.TokenTTL
+	ttl := h.config.Proxy.TokenTTL
 	if ttl <= 0 {
-		ttl = 24 * time.Hour
+		ttl = defaultTokenTTL
 	}
-	maxTTL := s.config.Proxy.TokenMaxTTL
+	maxTTL := h.config.Proxy.TokenMaxTTL
 	if maxTTL <= 0 {
-		maxTTL = 7 * 24 * time.Hour
+		maxTTL = defaultTokenMaxTTL
 	}
 
 	atData := &SelfIssuedTokenData{
@@ -716,12 +704,12 @@ func (s *ProxyAuthHandler) issueSelfIssuedTokens(ctx context.Context, idpToken *
 		Claims:    mappedClaims,
 	}
 
-	encAT, err := atData.Encode(s.encryption)
+	encAT, err := atData.Encode(h.encryption)
 	if err != nil {
 		utility.Logger.Error().Err(err).Msg("issueSelfIssuedTokens: failed to encrypt access token")
 		return nil, err
 	}
-	encRT, err := rtData.Encode(s.encryption)
+	encRT, err := rtData.Encode(h.encryption)
 	if err != nil {
 		utility.Logger.Error().Err(err).Msg("issueSelfIssuedTokens: failed to encrypt refresh token")
 		return nil, err
@@ -739,8 +727,8 @@ func (s *ProxyAuthHandler) issueSelfIssuedTokens(ctx context.Context, idpToken *
 
 // refreshSelfIssuedToken re-issues the access token from a self-issued refresh token
 // without contacting the IdP. The refresh token is returned unchanged (it is immutable).
-func (s *ProxyAuthHandler) refreshSelfIssuedToken(req *RefreshTokenRequest) (*oauth2.Token, error) {
-	si, err := DecodeSelfIssuedToken(req.RefreshToken, s.encryption)
+func (h *ProxyAuthHandler) refreshSelfIssuedToken(req *RefreshTokenRequest) (*oauth2.Token, error) {
+	si, err := DecodeSelfIssuedToken(req.RefreshToken, h.encryption)
 	if err != nil {
 		utility.Logger.Warn().Err(err).Msg("refreshSelfIssuedToken: failed to decode refresh token")
 		return nil, fmt.Errorf("invalid_grant")
@@ -752,9 +740,9 @@ func (s *ProxyAuthHandler) refreshSelfIssuedToken(req *RefreshTokenRequest) (*oa
 		return nil, fmt.Errorf("invalid_grant")
 	}
 
-	ttl := s.config.Proxy.TokenTTL
+	ttl := h.config.Proxy.TokenTTL
 	if ttl <= 0 {
-		ttl = 24 * time.Hour
+		ttl = defaultTokenTTL
 	}
 
 	newExpAt := min(now.Add(ttl).Unix(), si.ExpiresAt)
@@ -766,7 +754,7 @@ func (s *ProxyAuthHandler) refreshSelfIssuedToken(req *RefreshTokenRequest) (*oa
 		Claims:    si.Claims,
 	}
 
-	encAT, err := newAT.Encode(s.encryption)
+	encAT, err := newAT.Encode(h.encryption)
 	if err != nil {
 		utility.Logger.Error().Err(err).Msg("refreshSelfIssuedToken: failed to encrypt new access token")
 		return nil, err
@@ -783,14 +771,14 @@ func (s *ProxyAuthHandler) refreshSelfIssuedToken(req *RefreshTokenRequest) (*oa
 }
 
 // refreshJWKS re-fetches the JWKS from the IdP.
-func (s *ProxyAuthHandler) refreshJWKS() error {
-	jwks, err := fetchJWKS(s.openidConfiguration.JWKSEndpoint, s.config.IDP.SkipTLSVerify)
+func (h *ProxyAuthHandler) refreshJWKS() error {
+	jwks, err := fetchJWKS(h.openidConfiguration.JWKSEndpoint, h.config.IDP.SkipTLSVerify)
 	if err != nil {
 		return err
 	}
-	s.jwksMu.Lock()
-	s.jwks = jwks
-	s.jwksMu.Unlock()
+	h.jwksMu.Lock()
+	h.jwks = jwks
+	h.jwksMu.Unlock()
 	utility.Logger.Info().Msg("JWKS refreshed successfully")
 	return nil
 }

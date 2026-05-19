@@ -89,6 +89,16 @@ docker-compose up -d                                        # Proxy + test serve
 docker-compose -f docker-compose.observability.yaml up -d   # Jaeger, Prometheus, Grafana, OTel Collector
 ```
 
+## Task Completion Checklist
+
+After finishing **any** task, always run these three commands in order and fix any failures before reporting done:
+
+```bash
+task build   # must compile cleanly
+task test    # all tests must pass
+task lint    # no lint errors
+```
+
 ## MCP Specification References
 
 Authoritative specs that govern implementation decisions:

@@ -490,3 +490,102 @@ func TestAuthMiddleware_InvalidBearerFormat(t *testing.T) {
 
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
 }
+
+// --- ProxyHandler Tests ---
+
+func TestProxyHandler_ForwardsRequest(t *testing.T) {
+	var upstreamReceived *http.Request
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamReceived = r
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"result":"ok"}`))
+	}))
+	defer upstream.Close()
+
+	cfg := config.Config{
+		Upstream: config.Upstream{BaseURL: upstream.URL, Name: "test-upstream"},
+	}
+	p, err := NewProxy(cfg, nil, nil, nil)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest("GET", "/mcp/ping", nil)
+	rec := httptest.NewRecorder()
+
+	p.ProxyHandler(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.NotNil(t, upstreamReceived)
+	assert.Equal(t, "/mcp/ping", upstreamReceived.URL.Path)
+}
+
+func TestProxyHandler_ForwardsRealToken(t *testing.T) {
+	var authHeader string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authHeader = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	cfg := config.Config{
+		Upstream: config.Upstream{BaseURL: upstream.URL},
+	}
+	p, err := NewProxy(cfg, nil, nil, nil)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest("GET", "/mcp/tool", nil)
+	ctx := context.WithValue(req.Context(), keyRealToken, "real-idp-jwt")
+	req = req.WithContext(ctx)
+
+	rec := httptest.NewRecorder()
+	p.ProxyHandler(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "Bearer real-idp-jwt", authHeader)
+}
+
+func TestProxyHandler_ModifyResponse_StripsServerHeader(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Server", "upstream-server/1.0")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	cfg := config.Config{
+		Upstream: config.Upstream{BaseURL: upstream.URL},
+	}
+	p, err := NewProxy(cfg, nil, nil, nil)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest("GET", "/mcp/tool", nil)
+	rec := httptest.NewRecorder()
+	p.ProxyHandler(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Empty(t, rec.Header().Get("Server"), "Server header should be stripped by ModifyResponse")
+}
+
+func TestNewProxy_WithPathPrefix(t *testing.T) {
+	var receivedPath string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedPath = r.URL.Path
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	cfg := config.Config{
+		Upstream: config.Upstream{
+			BaseURL:    upstream.URL,
+			PathPrefix: "/v2",
+		},
+	}
+	p, err := NewProxy(cfg, nil, nil, nil)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest("GET", "/mcp/tool", nil)
+	rec := httptest.NewRecorder()
+	p.ProxyHandler(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	// SetURL prepends the prefix path to the original request path
+	assert.Equal(t, "/v2/mcp/tool", receivedPath)
+}

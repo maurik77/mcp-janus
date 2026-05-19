@@ -24,6 +24,12 @@ const (
 	metricsKey contextKey = iota
 )
 
+const defaultRequestTimeout = 30 * time.Second
+
+// NewGinEngine wires the Gin router with all middleware (CORS, OpenTelemetry,
+// request timeout, metrics) and registers every endpoint: discovery, dynamic
+// client registration, OAuth authorization flow, token exchange, and the
+// authenticated MCP proxy group.
 func NewGinEngine(config *config.Config,
 	authService auth.Service,
 	metadataService metadata.Service,
@@ -56,7 +62,7 @@ func NewGinEngine(config *config.Config,
 
 	// Custom timeout middleware
 	r.Use(func(c *gin.Context) {
-		ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
+		ctx, cancel := context.WithTimeout(c.Request.Context(), defaultRequestTimeout)
 		defer cancel()
 		c.Request = c.Request.WithContext(ctx)
 		c.Next()

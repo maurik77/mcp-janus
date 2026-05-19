@@ -71,7 +71,7 @@ func tokenHandler(accessToken, refreshToken string, statusCode int) http.Handler
 
 func makeEncryptedClientID(t *testing.T, redirectURIs []string, secret string) string {
 	t.Helper()
-	data := ClientIdData{RedirectURIs: redirectURIs, Secret: secret}
+	data := ClientIDData{RedirectURIs: redirectURIs, Secret: secret}
 	dataJSON, err := json.Marshal(data)
 	require.NoError(t, err)
 	return "encrypted_" + string(dataJSON)
@@ -1098,4 +1098,150 @@ func TestRefreshToken(t *testing.T) {
 		})
 		assert.Error(t, err)
 	})
+}
+
+// --- TestIssueSelfIssuedTokens error paths ---
+
+func TestIssueSelfIssuedTokens_AccessTokenEncryptionFailure(t *testing.T) {
+	rsaKey := testRSAKey(t)
+	kid := "test-kid"
+
+	callCount := 0
+	handler := &ProxyAuthHandler{
+		config: config.Config{
+			Proxy: config.Proxy{
+				TokenBehavior: config.TokenBehaviorSelfIssued,
+				TokenTTL:      24 * time.Hour,
+				TokenMaxTTL:   7 * 24 * time.Hour,
+			},
+		},
+		jwks: &JWKS{Keys: []JWK{rsaPublicKeyToJWK(&rsaKey.PublicKey, kid)}},
+		encryption: &mockEncryption{
+			encryptFunc: func(data []byte) (string, error) {
+				callCount++
+				return "", fmt.Errorf("encrypt failed")
+			},
+		},
+		tracer: otel.Tracer("test"),
+	}
+
+	idpToken := &oauth2.Token{
+		AccessToken: signTestJWT(t, rsaKey, kid, jwt.MapClaims{
+			"sub": "user",
+			"exp": time.Now().Add(time.Hour).Unix(),
+		}),
+	}
+
+	_, err := handler.issueSelfIssuedTokens(context.Background(), idpToken)
+	assert.Error(t, err)
+}
+
+func TestIssueSelfIssuedTokens_RefreshTokenEncryptionFailure(t *testing.T) {
+	rsaKey := testRSAKey(t)
+	kid := "test-kid"
+
+	callCount := 0
+	handler := &ProxyAuthHandler{
+		config: config.Config{
+			Proxy: config.Proxy{
+				TokenBehavior: config.TokenBehaviorSelfIssued,
+				TokenTTL:      24 * time.Hour,
+				TokenMaxTTL:   7 * 24 * time.Hour,
+			},
+		},
+		jwks: &JWKS{Keys: []JWK{rsaPublicKeyToJWK(&rsaKey.PublicKey, kid)}},
+		encryption: &mockEncryption{
+			encryptFunc: func(data []byte) (string, error) {
+				callCount++
+				if callCount == 1 {
+					return "encrypted_at", nil
+				}
+				return "", fmt.Errorf("encrypt failed")
+			},
+		},
+		tracer: otel.Tracer("test"),
+	}
+
+	idpToken := &oauth2.Token{
+		AccessToken: signTestJWT(t, rsaKey, kid, jwt.MapClaims{
+			"sub": "user",
+			"exp": time.Now().Add(time.Hour).Unix(),
+		}),
+	}
+
+	_, err := handler.issueSelfIssuedTokens(context.Background(), idpToken)
+	assert.Error(t, err)
+}
+
+func TestIssueSelfIssuedTokens_ClaimsMapping(t *testing.T) {
+	rsaKey := testRSAKey(t)
+	kid := "test-kid"
+
+	handler := &ProxyAuthHandler{
+		config: config.Config{
+			Proxy: config.Proxy{
+				TokenBehavior: config.TokenBehaviorSelfIssued,
+				TokenTTL:      24 * time.Hour,
+				TokenMaxTTL:   7 * 24 * time.Hour,
+			},
+			IDP: config.IDP{
+				ClaimsMapping: map[string]string{
+					"sub":   "X-User-ID",
+					"email": "X-User-Email",
+				},
+			},
+		},
+		jwks: &JWKS{Keys: []JWK{rsaPublicKeyToJWK(&rsaKey.PublicKey, kid)}},
+		encryption: &mockEncryption{},
+		tracer:     otel.Tracer("test"),
+	}
+
+	idpToken := &oauth2.Token{
+		AccessToken: signTestJWT(t, rsaKey, kid, jwt.MapClaims{
+			"sub":   "user-999",
+			"email": "user@example.com",
+			"exp":   time.Now().Add(time.Hour).Unix(),
+		}),
+	}
+
+	token, err := handler.issueSelfIssuedTokens(context.Background(), idpToken)
+	require.NoError(t, err)
+
+	atJSON := token.AccessToken[len("encrypted_"):]
+	var at SelfIssuedTokenData
+	require.NoError(t, json.Unmarshal([]byte(atJSON), &at))
+	assert.Equal(t, "user-999", at.Claims["X-User-ID"])
+	assert.Equal(t, "user@example.com", at.Claims["X-User-Email"])
+}
+
+// --- TestRefreshSelfIssuedToken_EncryptionError ---
+
+func TestRefreshSelfIssuedToken_EncryptionFailure(t *testing.T) {
+	now := time.Now()
+	rtData := &SelfIssuedTokenData{
+		Type:      "si",
+		IssuedAt:  now.Add(-time.Hour).Unix(),
+		ExpiresAt: now.Add(6 * 24 * time.Hour).Unix(),
+		Claims:    map[string]string{"X-Sub": "user-123"},
+	}
+	b, _ := json.Marshal(rtData)
+	encRT := "encrypted_" + string(b)
+
+	handler := &ProxyAuthHandler{
+		config: config.Config{
+			Proxy: config.Proxy{
+				TokenBehavior: config.TokenBehaviorSelfIssued,
+				TokenTTL:      24 * time.Hour,
+			},
+		},
+		encryption: &mockEncryption{
+			encryptFunc: func(data []byte) (string, error) {
+				return "", fmt.Errorf("encrypt failed")
+			},
+		},
+		tracer: otel.Tracer("test"),
+	}
+
+	_, err := handler.refreshSelfIssuedToken(&RefreshTokenRequest{RefreshToken: encRT})
+	assert.Error(t, err)
 }

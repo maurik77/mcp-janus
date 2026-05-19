@@ -37,6 +37,9 @@ const (
 	keyRealToken key = iota
 )
 
+// NewProxy constructs the reverse proxy that decrypts opaque bearer tokens,
+// validates the IdP JWT inside them, maps claims to upstream request headers,
+// and forwards the authenticated request to the configured upstream MCP server.
 func NewProxy(cfg config.Config,
 	metadata metadata.Service,
 	auth auth.Service,
@@ -89,7 +92,10 @@ func NewProxy(cfg config.Config,
 	}, nil
 }
 
-// AuthMiddleware validates opaque_token and injects real token + upstream
+// AuthMiddleware returns an http.Handler middleware that decrypts the opaque
+// bearer token, validates the IdP JWT (or self-issued token) contained within,
+// injects mapped claims as request headers, and calls the next handler.
+// Requests with a missing or invalid token receive 401 Unauthorized.
 func (p *proxy) AuthMiddleware() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -107,7 +113,6 @@ func (p *proxy) AuthMiddleware() func(http.Handler) http.Handler {
 
 			span.AddEvent("Token extracted")
 
-			// Decrypt opaque token
 			data, err := p.encryption.Decrypt(token)
 			if err != nil {
 				utility.Logger.Warn().Err(err).Str("remote_addr", r.RemoteAddr).Msg("AuthMiddleware: token decryption failed")
@@ -154,7 +159,6 @@ func (p *proxy) AuthMiddleware() func(http.Handler) http.Handler {
 
 			span.AddEvent("JWT validated")
 
-			// Extract claims
 			claims, ok := jwtToken.Claims.(jwt.MapClaims)
 			if !ok {
 				utility.Logger.Warn().Str("remote_addr", r.RemoteAddr).Msg("AuthMiddleware: failed to parse JWT claims")
@@ -163,7 +167,6 @@ func (p *proxy) AuthMiddleware() func(http.Handler) http.Handler {
 				return
 			}
 
-			// Add subject to span attributes
 			if sub, ok := claims["sub"].(string); ok {
 				span.SetAttributes(attribute.String("user.id", sub))
 				utility.Logger.Info().Str("sub", sub).Str("remote_addr", r.RemoteAddr).Msg("AuthMiddleware: authentication successful")
@@ -189,7 +192,7 @@ func (p *proxy) AuthMiddleware() func(http.Handler) http.Handler {
 	}
 }
 
-// ProxyHandler forwards request to correct upstream
+// ProxyHandler attaches tracing attributes and delegates to the reverse proxy.
 func (p *proxy) ProxyHandler(w http.ResponseWriter, r *http.Request) {
 	_, span := p.tracer.Start(r.Context(), "proxy.ProxyHandler")
 	defer span.End()
@@ -211,7 +214,6 @@ func (p *proxy) ProxyHandler(w http.ResponseWriter, r *http.Request) {
 	p.reverseProxy.ServeHTTP(w, r)
 }
 
-// extractBearerToken extracts token from Authorization header
 func extractBearerToken(r *http.Request) (string, bool) {
 	auth := r.Header.Get("Authorization")
 	if auth == "" || !strings.HasPrefix(auth, "Bearer ") {

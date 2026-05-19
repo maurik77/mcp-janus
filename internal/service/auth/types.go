@@ -58,12 +58,12 @@ type RefreshTokenRequest struct {
 	ClientSecret string `json:"client_secret" form:"client_secret"`
 }
 
-type ClientIdData struct {
+type ClientIDData struct {
 	RedirectURIs []string `json:"r"`
 	Secret       string   `json:"s"`
 }
 
-func (c *ClientIdData) Encode(encryption utility.Encryption) (string, error) {
+func (c *ClientIDData) Encode(encryption utility.Encryption) (string, error) {
 	dataJSON, err := json.Marshal(c)
 	if err != nil {
 		return "", err
@@ -76,12 +76,12 @@ func (c *ClientIdData) Encode(encryption utility.Encryption) (string, error) {
 	return encrypted, nil
 }
 
-func DecodeClientID(encrypted string, encryption utility.Encryption) (*ClientIdData, error) {
+func DecodeClientID(encrypted string, encryption utility.Encryption) (*ClientIDData, error) {
 	data, err := encryption.Decrypt(encrypted)
 	if err != nil {
 		return nil, err
 	}
-	var cid ClientIdData
+	var cid ClientIDData
 	if err := json.Unmarshal(data, &cid); err != nil {
 		return nil, err
 	}

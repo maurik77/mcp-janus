@@ -30,17 +30,17 @@ func (m *mockEncryption) Decrypt(enc string) ([]byte, error) {
 	return []byte(enc), nil
 }
 
-func TestClientIdData_Encode(t *testing.T) {
+func TestClientIDData_Encode(t *testing.T) {
 	tests := []struct {
 		name    string
-		data    *ClientIdData
+		data    *ClientIDData
 		mockEnc utility.Encryption
 		wantErr bool
 		errMsg  string
 	}{
 		{
 			name: "successful encoding",
-			data: &ClientIdData{
+			data: &ClientIDData{
 				RedirectURIs: []string{"https://example.com/callback"},
 				Secret:       "test-secret-123",
 			},
@@ -49,7 +49,7 @@ func TestClientIdData_Encode(t *testing.T) {
 		},
 		{
 			name: "encoding with multiple redirect URIs",
-			data: &ClientIdData{
+			data: &ClientIDData{
 				RedirectURIs: []string{
 					"https://example.com/callback",
 					"https://example.com/callback2",
@@ -61,7 +61,7 @@ func TestClientIdData_Encode(t *testing.T) {
 		},
 		{
 			name: "encoding with empty redirect URIs",
-			data: &ClientIdData{
+			data: &ClientIDData{
 				RedirectURIs: []string{},
 				Secret:       "empty-uris-secret",
 			},
@@ -70,7 +70,7 @@ func TestClientIdData_Encode(t *testing.T) {
 		},
 		{
 			name: "encoding with nil redirect URIs",
-			data: &ClientIdData{
+			data: &ClientIDData{
 				RedirectURIs: nil,
 				Secret:       "nil-uris-secret",
 			},
@@ -79,7 +79,7 @@ func TestClientIdData_Encode(t *testing.T) {
 		},
 		{
 			name: "encryption fails",
-			data: &ClientIdData{
+			data: &ClientIDData{
 				RedirectURIs: []string{"https://example.com/callback"},
 				Secret:       "test-secret",
 			},
@@ -125,14 +125,14 @@ func TestDecodeClientID(t *testing.T) {
 		name      string
 		encrypted string
 		mockEnc   utility.Encryption
-		want      *ClientIdData
+		want      *ClientIDData
 		wantErr   bool
 		errMsg    string
 	}{
 		{
 			name: "successful decoding",
 			encrypted: func() string {
-				data := &ClientIdData{
+				data := &ClientIDData{
 					RedirectURIs: []string{"https://example.com/callback"},
 					Secret:       "test-secret-123",
 				}
@@ -140,7 +140,7 @@ func TestDecodeClientID(t *testing.T) {
 				return "encrypted_" + string(dataJSON)
 			}(),
 			mockEnc: &mockEncryption{},
-			want: &ClientIdData{
+			want: &ClientIDData{
 				RedirectURIs: []string{"https://example.com/callback"},
 				Secret:       "test-secret-123",
 			},
@@ -149,7 +149,7 @@ func TestDecodeClientID(t *testing.T) {
 		{
 			name: "decoding with multiple redirect URIs",
 			encrypted: func() string {
-				data := &ClientIdData{
+				data := &ClientIDData{
 					RedirectURIs: []string{
 						"https://example.com/callback",
 						"https://example.com/callback2",
@@ -160,7 +160,7 @@ func TestDecodeClientID(t *testing.T) {
 				return "encrypted_" + string(dataJSON)
 			}(),
 			mockEnc: &mockEncryption{},
-			want: &ClientIdData{
+			want: &ClientIDData{
 				RedirectURIs: []string{
 					"https://example.com/callback",
 					"https://example.com/callback2",
@@ -191,7 +191,7 @@ func TestDecodeClientID(t *testing.T) {
 		{
 			name: "empty encrypted string",
 			encrypted: func() string {
-				data := &ClientIdData{
+				data := &ClientIDData{
 					RedirectURIs: []string{},
 					Secret:       "",
 				}
@@ -199,7 +199,7 @@ func TestDecodeClientID(t *testing.T) {
 				return "encrypted_" + string(dataJSON)
 			}(),
 			mockEnc: &mockEncryption{},
-			want: &ClientIdData{
+			want: &ClientIDData{
 				RedirectURIs: []string{},
 				Secret:       "",
 			},
@@ -251,21 +251,21 @@ func TestDecodeClientID(t *testing.T) {
 	}
 }
 
-func TestClientIdData_RoundTrip(t *testing.T) {
+func TestClientIDData_RoundTrip(t *testing.T) {
 	tests := []struct {
 		name string
-		data *ClientIdData
+		data *ClientIDData
 	}{
 		{
 			name: "single redirect URI",
-			data: &ClientIdData{
+			data: &ClientIDData{
 				RedirectURIs: []string{"https://example.com/callback"},
 				Secret:       "secret-123",
 			},
 		},
 		{
 			name: "multiple redirect URIs",
-			data: &ClientIdData{
+			data: &ClientIDData{
 				RedirectURIs: []string{
 					"https://example.com/callback",
 					"https://example.com/callback2",
@@ -276,14 +276,14 @@ func TestClientIdData_RoundTrip(t *testing.T) {
 		},
 		{
 			name: "empty redirect URIs",
-			data: &ClientIdData{
+			data: &ClientIDData{
 				RedirectURIs: []string{},
 				Secret:       "no-uris",
 			},
 		},
 		{
 			name: "special characters in secret",
-			data: &ClientIdData{
+			data: &ClientIDData{
 				RedirectURIs: []string{"https://example.com/callback"},
 				Secret:       "secret!@#$%^&*()_+-=[]{}|;':\",./<>?",
 			},
