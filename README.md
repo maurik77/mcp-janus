@@ -19,6 +19,8 @@ Janus solves this by encrypting every IdP JWT into an **opaque bearer token** us
 - **JWT validation** -- full claim validation (expiry, audience, issuer) with JWKS key fetching
 - **Claims-to-headers mapping** -- configurable IdP claim injection into upstream HTTP headers
 - **Encrypted client credentials** -- dynamic registration returns AEAD-encrypted `client_id` / `client_secret`
+- **CIMD SSRF guard** -- CIMD fetch blocks private/loopback IPs and enforces an optional domain allowlist
+- **JTI replay protection** -- `private_key_jwt` assertions are single-use; replayed JTIs are rejected
 
 ### Standards Compliance
 
@@ -26,6 +28,10 @@ Janus solves this by encrypting every IdP JWT into an **opaque bearer token** us
 - **RFC 7591** -- dynamic client registration
 - **RFC 9728** -- protected resource metadata for discovery
 - **OpenID Connect Discovery** -- `.well-known/openid-configuration` endpoint
+- **CIMD** -- OAuth Client ID Metadata Document (`draft-ietf-oauth-client-id-metadata-document-00`); `client_id` is an HTTPS URL the proxy fetches at runtime — no pre-registration required
+- **RFC 7523 / `private_key_jwt`** -- JWT Bearer client assertions validated via `jwks_uri` from the CIMD document; JTI replay protection included
+- **RFC 8707** -- resource indicators; clients bind tokens to a specific MCP server
+- **RFC 9207** -- `iss` parameter appended to authorization response redirects (mix-up attack protection)
 
 ### Operations
 
@@ -118,10 +124,10 @@ See [docs/testing-guide.md](docs/testing-guide.md) for the full end-to-end test 
 
 ### Opaque token flow
 
-1. **Register** -- client calls `POST /register` with redirect URIs. Proxy returns an AEAD-encrypted `client_id` and `client_secret`.
-2. **Authorize** -- client redirects to `GET /auth` with PKCE `code_challenge`. Proxy redirects to the IdP.
-3. **Callback** -- IdP redirects back to `GET /callback`. Proxy receives the authorization code from the IdP.
-4. **Token exchange** -- client calls `POST /token` with `code_verifier`. Proxy exchanges the code with the IdP, receives a real JWT, encrypts it with AES-256-GCM, and returns the opaque bearer to the client.
+1. **Register** -- client calls `POST /register` with redirect URIs (RFC 7591), _or_ uses a URL as `client_id` (CIMD — no pre-registration needed). Proxy returns an AEAD-encrypted `client_id` and `client_secret` for registered clients.
+2. **Authorize** -- client redirects to `GET /auth` with PKCE `code_challenge` and optional `resource` (RFC 8707). Proxy redirects to the IdP.
+3. **Callback** -- IdP redirects back to `GET /callback`. Proxy appends `iss` to the redirect (RFC 9207) for mix-up attack protection.
+4. **Token exchange** -- client calls `POST /token` with `code_verifier`. For CIMD clients with `private_key_jwt`, a signed JWT assertion is verified against the client's `jwks_uri`. Proxy exchanges the code with the IdP, encrypts the real JWT, and returns the opaque bearer.
 5. **Authenticated requests** -- client sends `Authorization: Bearer <opaque>` to `GET/POST /mcp/*`. Proxy decrypts, validates the JWT, maps claims to headers, and forwards with the real token.
 6. **Refresh** -- client calls `POST /refresh` with the encrypted refresh token. Proxy decrypts, refreshes with the IdP, re-encrypts, and returns a new opaque bearer.
 
@@ -155,9 +161,14 @@ Create a `config.yaml` in the working directory (or set `MCP_`-prefixed environm
 ```yaml
 proxy:
   base_url: http://localhost:8080        # Canonical URL of this proxy
+  issuer: ""                             # Issuer identifier (defaults to base_url if empty)
   listen_addr: ":8080"                   # Listen address
   log_level: info                        # trace|debug|info|warn|error|fatal|panic
   log_format: json                       # json
+  # CIMD: OAuth Client ID Metadata Document support
+  cimd_enabled: true                     # Accept URL-format client_id values
+  cimd_allow_list: []                    # Domain allowlist; empty = any HTTPS URL accepted
+  cimd_localhost_port_insensitive: false # Match localhost redirect URIs ignoring port (Claude Code compat)
 
 idp:
   client_id: your-idp-client-id         # OAuth client ID at the IdP
@@ -281,9 +292,12 @@ docker-compose -f docker-compose.yaml -f docker-compose.observability.yaml up -d
 
 - [OAuth 2.1 (IETF Draft)](https://datatracker.ietf.org/doc/html/draft-ietf-oauth-v2-1-13)
 - [RFC 7591: Dynamic Client Registration](https://datatracker.ietf.org/doc/html/rfc7591)
+- [RFC 7523: JWT Bearer Client Assertions (`private_key_jwt`)](https://datatracker.ietf.org/doc/html/rfc7523)
 - [RFC 8414: Authorization Server Metadata](https://datatracker.ietf.org/doc/html/rfc8414)
-- [RFC 9728: Protected Resource Metadata](https://datatracker.ietf.org/doc/html/rfc9728)
 - [RFC 8707: Resource Indicators](https://datatracker.ietf.org/doc/html/rfc8707)
+- [RFC 9207: Authorization Server Issuer Identification](https://datatracker.ietf.org/doc/html/rfc9207)
+- [RFC 9728: Protected Resource Metadata](https://datatracker.ietf.org/doc/html/rfc9728)
+- [CIMD: OAuth Client ID Metadata Document](https://datatracker.ietf.org/doc/html/draft-ietf-oauth-client-id-metadata-document)
 
 ### Project Documentation
 

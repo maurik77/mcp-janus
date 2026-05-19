@@ -14,6 +14,12 @@ data:
       log_level: {{ .Values.proxy.logLevel | quote }}
       log_format: {{ .Values.proxy.logFormat | quote }}
       tls: {{ .Values.proxy.tls }}
+      cimd_enabled: {{ .Values.proxy.cimdEnabled }}
+      cimd_allow_list:
+        {{- range .Values.proxy.cimdAllowList }}
+        - {{ . | quote }}
+        {{- end }}
+      cimd_localhost_port_insensitive: {{ .Values.proxy.cimdLocalhostPortInsensitive }}
 
     idp:
       client_id: {{ .Values.idp.clientId | quote }}

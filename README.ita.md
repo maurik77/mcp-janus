@@ -19,6 +19,8 @@ Janus risolve questo problema crittografando ogni JWT dell'IdP in un **token bea
 - **Validazione JWT** -- validazione completa dei claim (scadenza, audience, issuer) con recupero chiavi JWKS
 - **Mappatura claims-to-headers** -- iniezione configurabile dei claim IdP negli header HTTP upstream
 - **Credenziali client crittografate** -- la registrazione dinamica restituisce `client_id` / `client_secret` crittografati con AEAD
+- **Protezione SSRF per CIMD** -- il fetch del documento CIMD blocca IP privati/loopback e applica una lista di domini consentiti opzionale
+- **Protezione replay JTI** -- le assertion `private_key_jwt` sono monouso; i JTI già utilizzati vengono rifiutati
 
 ### Conformità agli Standard
 
@@ -26,6 +28,10 @@ Janus risolve questo problema crittografando ogni JWT dell'IdP in un **token bea
 - **RFC 7591** -- registrazione dinamica dei client
 - **RFC 9728** -- metadata delle risorse protette per il discovery
 - **OpenID Connect Discovery** -- endpoint `.well-known/openid-configuration`
+- **CIMD** -- OAuth Client ID Metadata Document (`draft-ietf-oauth-client-id-metadata-document-00`); il `client_id` è un URL HTTPS che il proxy recupera a runtime — nessuna pre-registrazione richiesta
+- **RFC 7523 / `private_key_jwt`** -- assertion JWT del client validate tramite `jwks_uri` dal documento CIMD; protezione replay JTI inclusa
+- **RFC 8707** -- resource indicators; i client legano i token a uno specifico server MCP
+- **RFC 9207** -- parametro `iss` aggiunto alla risposta di autorizzazione (protezione da attacchi mix-up)
 
 ### Operatività
 
@@ -118,10 +124,10 @@ Consulta [docs/testing-guide.md](docs/testing-guide.md) per la guida completa ai
 
 ### Flusso dei token opachi
 
-1. **Registrazione** -- il client chiama `POST /register` con gli URI di redirect. Il proxy restituisce un `client_id` e un `client_secret` crittografati con AEAD.
-2. **Autorizzazione** -- il client effettua il redirect a `GET /auth` con il `code_challenge` PKCE. Il proxy reindirizza verso l'IdP.
-3. **Callback** -- l'IdP reindirizza a `GET /callback`. Il proxy riceve il codice di autorizzazione dall'IdP.
-4. **Scambio token** -- il client chiama `POST /token` con il `code_verifier`. Il proxy scambia il codice con l'IdP, riceve un JWT reale, lo cripta con AES-256-GCM e restituisce il bearer opaco al client.
+1. **Registrazione** -- il client chiama `POST /register` con gli URI di redirect (RFC 7591), _oppure_ usa un URL come `client_id` (CIMD — nessuna pre-registrazione necessaria). Il proxy restituisce `client_id` e `client_secret` crittografati con AEAD per i client registrati.
+2. **Autorizzazione** -- il client effettua il redirect a `GET /auth` con il `code_challenge` PKCE e il `resource` opzionale (RFC 8707). Il proxy reindirizza verso l'IdP.
+3. **Callback** -- l'IdP reindirizza a `GET /callback`. Il proxy aggiunge `iss` al redirect (RFC 9207) per protezione da attacchi mix-up.
+4. **Scambio token** -- il client chiama `POST /token` con il `code_verifier`. Per client CIMD con `private_key_jwt`, viene verificata un'assertion JWT firmata tramite `jwks_uri` del client. Il proxy scambia il codice con l'IdP, cripta il JWT reale e restituisce il bearer opaco.
 5. **Richieste autenticate** -- il client invia `Authorization: Bearer <opaque>` a `GET/POST /mcp/*`. Il proxy decripta, valida il JWT, mappa i claims negli header e inoltra con il token reale.
 6. **Refresh** -- il client chiama `POST /refresh` con il refresh token crittografato. Il proxy decripta, effettua il refresh con l'IdP, ri-cripta e restituisce un nuovo bearer opaco.
 
@@ -155,9 +161,14 @@ Crea un file `config.yaml` nella directory di lavoro (oppure imposta variabili d
 ```yaml
 proxy:
   base_url: http://localhost:8080        # URL canonico di questo proxy
+  issuer: ""                             # Identificatore issuer (default: base_url se vuoto)
   listen_addr: ":8080"                   # Indirizzo di ascolto
   log_level: info                        # trace|debug|info|warn|error|fatal|panic
   log_format: json                       # json
+  # CIMD: supporto OAuth Client ID Metadata Document
+  cimd_enabled: true                     # Accetta client_id in formato URL
+  cimd_allow_list: []                    # Lista domini consentiti; vuota = qualsiasi URL HTTPS accettato
+  cimd_localhost_port_insensitive: false # Confronta URI localhost ignorando la porta (compatibilità Claude Code)
 
 idp:
   client_id: your-idp-client-id         # OAuth client ID presso l'IdP
@@ -281,9 +292,12 @@ docker-compose -f docker-compose.yaml -f docker-compose.observability.yaml up -d
 
 - [OAuth 2.1 (IETF Draft)](https://datatracker.ietf.org/doc/html/draft-ietf-oauth-v2-1-13)
 - [RFC 7591: Dynamic Client Registration](https://datatracker.ietf.org/doc/html/rfc7591)
+- [RFC 7523: JWT Bearer Client Assertions (`private_key_jwt`)](https://datatracker.ietf.org/doc/html/rfc7523)
 - [RFC 8414: Authorization Server Metadata](https://datatracker.ietf.org/doc/html/rfc8414)
-- [RFC 9728: Protected Resource Metadata](https://datatracker.ietf.org/doc/html/rfc9728)
 - [RFC 8707: Resource Indicators](https://datatracker.ietf.org/doc/html/rfc8707)
+- [RFC 9207: Authorization Server Issuer Identification](https://datatracker.ietf.org/doc/html/rfc9207)
+- [RFC 9728: Protected Resource Metadata](https://datatracker.ietf.org/doc/html/rfc9728)
+- [CIMD: OAuth Client ID Metadata Document](https://datatracker.ietf.org/doc/html/draft-ietf-oauth-client-id-metadata-document)
 
 ### Documentazione del Progetto
 
