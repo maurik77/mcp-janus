@@ -14,6 +14,15 @@ data:
       log_level: {{ .Values.proxy.logLevel | quote }}
       log_format: {{ .Values.proxy.logFormat | quote }}
       tls: {{ .Values.proxy.tls }}
+      {{- if .Values.proxy.tokenBehavior }}
+      token_behavior: {{ .Values.proxy.tokenBehavior | quote }}
+      {{- end }}
+      {{- if .Values.proxy.tokenTtl }}
+      token_ttl: {{ .Values.proxy.tokenTtl | quote }}
+      {{- end }}
+      {{- if .Values.proxy.tokenMaxTtl }}
+      token_max_ttl: {{ .Values.proxy.tokenMaxTtl | quote }}
+      {{- end }}
 
     idp:
       client_id: {{ .Values.idp.clientId | quote }}

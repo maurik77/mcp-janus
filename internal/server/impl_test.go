@@ -2,12 +2,14 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"mcpproxy/internal/infrastructure/config"
 	"mcpproxy/internal/service/auth"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
@@ -71,8 +73,8 @@ func (m *mockAuthService) RetrieveAccessToken(ctx context.Context, req *auth.Acc
 	return args.Get(0).(*oauth2.Token), args.Error(1)
 }
 
-func (m *mockAuthService) RefreshToken(ctx context.Context, refreshToken string) (*oauth2.Token, error) {
-	args := m.Called(ctx, refreshToken)
+func (m *mockAuthService) RefreshToken(ctx context.Context, req *auth.RefreshTokenRequest) (*oauth2.Token, error) {
+	args := m.Called(ctx, req)
 	return args.Get(0).(*oauth2.Token), args.Error(1)
 }
 
@@ -356,6 +358,116 @@ func TestAuthMiddleware_Success(t *testing.T) {
 	assert.Equal(t, "opaque-token", realToken)
 }
 
+func makeSelfIssuedBlob(t *testing.T, expiresAt int64, claims map[string]string) []byte {
+	t.Helper()
+	si := auth.SelfIssuedTokenData{
+		Type:      "si",
+		IssuedAt:  time.Now().Add(-time.Hour).Unix(),
+		ExpiresAt: expiresAt,
+		Claims:    claims,
+	}
+	b, err := json.Marshal(si)
+	require.NoError(t, err)
+	return b
+}
+
+func TestAuthMiddleware_SelfIssuedToken_Valid(t *testing.T) {
+	metaSvc := new(mockMetadataService)
+	enc := new(mockEncryption)
+
+	siBlob := makeSelfIssuedBlob(t, time.Now().Add(23*time.Hour).Unix(),
+		map[string]string{"X-Sub": "user-123", "X-Email": "user@example.com"})
+	enc.On("Decrypt", "opaque-si-token").Return(siBlob, nil)
+
+	cfg := config.Config{
+		Upstream: config.Upstream{BaseURL: "http://localhost:8081"},
+		IDP: config.IDP{
+			FixedHeaders: map[string]string{"X-Tenant": "test-tenant"},
+		},
+	}
+	p, err := NewProxy(cfg, metaSvc, nil, enc)
+	require.NoError(t, err)
+
+	var capturedReq *http.Request
+	middleware := p.AuthMiddleware()
+	handler := middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedReq = r
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest("GET", "/mcp/test", nil)
+	req.Header.Set("Authorization", "Bearer opaque-si-token")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	require.NotNil(t, capturedReq)
+	assert.Equal(t, "user-123", capturedReq.Header.Get("X-Sub"))
+	assert.Equal(t, "user@example.com", capturedReq.Header.Get("X-Email"))
+	assert.Equal(t, "test-tenant", capturedReq.Header.Get("X-Tenant"))
+	assert.Equal(t, "opaque-si-token", capturedReq.Context().Value(keyRealToken))
+}
+
+func TestAuthMiddleware_SelfIssuedToken_Expired(t *testing.T) {
+	metaSvc := new(mockMetadataService)
+	enc := new(mockEncryption)
+
+	siBlob := makeSelfIssuedBlob(t, time.Now().Add(-time.Hour).Unix(), // expired
+		map[string]string{"X-Sub": "user-123"})
+	enc.On("Decrypt", "expired-si-token").Return(siBlob, nil)
+
+	cfg := config.Config{
+		Upstream: config.Upstream{BaseURL: "http://localhost:8081"},
+	}
+	p, err := NewProxy(cfg, metaSvc, nil, enc)
+	require.NoError(t, err)
+
+	middleware := p.AuthMiddleware()
+	handler := middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("next handler must not be called for expired token")
+	}))
+
+	req := httptest.NewRequest("GET", "/mcp/test", nil)
+	req.Header.Set("Authorization", "Bearer expired-si-token")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	assert.Contains(t, rec.Body.String(), "invalid_token")
+}
+
+func TestAuthMiddleware_SelfIssuedToken_WrongDiscriminator_FallsBackToJWT(t *testing.T) {
+	metaSvc := new(mockMetadataService)
+	metaSvc.On("WWWAuthenticateHeader").Return("Bearer")
+	enc := new(mockEncryption)
+
+	// JSON with wrong type discriminator — falls through to JWT validation path
+	wrongBlob, _ := json.Marshal(map[string]any{"t": "other", "exp": 9999999999, "iat": 1000, "cl": map[string]string{}})
+	enc.On("Decrypt", "wrong-type-token").Return(wrongBlob, nil)
+
+	authSvc := new(mockAuthService)
+	authSvc.On("ValidateJWT", mock.Anything, string(wrongBlob)).Return((*jwt.Token)(nil), assert.AnError)
+
+	cfg := config.Config{
+		Upstream: config.Upstream{BaseURL: "http://localhost:8081"},
+	}
+	p, err := NewProxy(cfg, metaSvc, authSvc, enc)
+	require.NoError(t, err)
+
+	middleware := p.AuthMiddleware()
+	handler := middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("next handler must not be called when JWT validation fails")
+	}))
+
+	req := httptest.NewRequest("GET", "/mcp/test", nil)
+	req.Header.Set("Authorization", "Bearer wrong-type-token")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	assert.Contains(t, rec.Body.String(), "invalid_token")
+}
+
 func TestAuthMiddleware_InvalidBearerFormat(t *testing.T) {
 	metaSvc := new(mockMetadataService)
 	metaSvc.On("WWWAuthenticateHeader").Return("Bearer")
@@ -377,4 +489,103 @@ func TestAuthMiddleware_InvalidBearerFormat(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+}
+
+// --- ProxyHandler Tests ---
+
+func TestProxyHandler_ForwardsRequest(t *testing.T) {
+	var upstreamReceived *http.Request
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamReceived = r
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"result":"ok"}`))
+	}))
+	defer upstream.Close()
+
+	cfg := config.Config{
+		Upstream: config.Upstream{BaseURL: upstream.URL, Name: "test-upstream"},
+	}
+	p, err := NewProxy(cfg, nil, nil, nil)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest("GET", "/mcp/ping", nil)
+	rec := httptest.NewRecorder()
+
+	p.ProxyHandler(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.NotNil(t, upstreamReceived)
+	assert.Equal(t, "/mcp/ping", upstreamReceived.URL.Path)
+}
+
+func TestProxyHandler_ForwardsRealToken(t *testing.T) {
+	var authHeader string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authHeader = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	cfg := config.Config{
+		Upstream: config.Upstream{BaseURL: upstream.URL},
+	}
+	p, err := NewProxy(cfg, nil, nil, nil)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest("GET", "/mcp/tool", nil)
+	ctx := context.WithValue(req.Context(), keyRealToken, "real-idp-jwt")
+	req = req.WithContext(ctx)
+
+	rec := httptest.NewRecorder()
+	p.ProxyHandler(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "Bearer real-idp-jwt", authHeader)
+}
+
+func TestProxyHandler_ModifyResponse_StripsServerHeader(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Server", "upstream-server/1.0")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	cfg := config.Config{
+		Upstream: config.Upstream{BaseURL: upstream.URL},
+	}
+	p, err := NewProxy(cfg, nil, nil, nil)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest("GET", "/mcp/tool", nil)
+	rec := httptest.NewRecorder()
+	p.ProxyHandler(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Empty(t, rec.Header().Get("Server"), "Server header should be stripped by ModifyResponse")
+}
+
+func TestNewProxy_WithPathPrefix(t *testing.T) {
+	var receivedPath string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedPath = r.URL.Path
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	cfg := config.Config{
+		Upstream: config.Upstream{
+			BaseURL:    upstream.URL,
+			PathPrefix: "/v2",
+		},
+	}
+	p, err := NewProxy(cfg, nil, nil, nil)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest("GET", "/mcp/tool", nil)
+	rec := httptest.NewRecorder()
+	p.ProxyHandler(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	// SetURL prepends the prefix path to the original request path
+	assert.Equal(t, "/v2/mcp/tool", receivedPath)
 }

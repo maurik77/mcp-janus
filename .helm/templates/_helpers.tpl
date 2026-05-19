@@ -15,6 +15,9 @@
 helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
 {{ include "mcp-janus.selectorLabels" . }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{- with .Values.labels }}
+{{ toYaml . | trimSuffix "\n" }}
+{{- end }}
 {{- end }}
 
 {{- define "mcp-janus.selectorLabels" -}}

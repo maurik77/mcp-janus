@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"mcpproxy/internal/infrastructure/config"
 	"mcpproxy/internal/service/auth"
@@ -11,6 +12,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	"go.opentelemetry.io/otel"
@@ -35,6 +37,9 @@ const (
 	keyRealToken key = iota
 )
 
+// NewProxy constructs the reverse proxy that decrypts opaque bearer tokens,
+// validates the IdP JWT inside them, maps claims to upstream request headers,
+// and forwards the authenticated request to the configured upstream MCP server.
 func NewProxy(cfg config.Config,
 	metadata metadata.Service,
 	auth auth.Service,
@@ -87,7 +92,10 @@ func NewProxy(cfg config.Config,
 	}, nil
 }
 
-// AuthMiddleware validates opaque_token and injects real token + upstream
+// AuthMiddleware returns an http.Handler middleware that decrypts the opaque
+// bearer token, validates the IdP JWT (or self-issued token) contained within,
+// injects mapped claims as request headers, and calls the next handler.
+// Requests with a missing or invalid token receive 401 Unauthorized.
 func (p *proxy) AuthMiddleware() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -105,7 +113,6 @@ func (p *proxy) AuthMiddleware() func(http.Handler) http.Handler {
 
 			span.AddEvent("Token extracted")
 
-			// Decrypt opaque token
 			data, err := p.encryption.Decrypt(token)
 			if err != nil {
 				utility.Logger.Warn().Err(err).Str("remote_addr", r.RemoteAddr).Msg("AuthMiddleware: token decryption failed")
@@ -116,6 +123,28 @@ func (p *proxy) AuthMiddleware() func(http.Handler) http.Handler {
 			}
 
 			span.AddEvent("Token decrypted")
+
+			// Detect self-issued token by discriminator field "t":"si"
+			var si auth.SelfIssuedTokenData
+			if jsonErr := json.Unmarshal(data, &si); jsonErr == nil && si.Type == "si" {
+				if time.Now().Unix() > si.ExpiresAt {
+					utility.Logger.Warn().Str("remote_addr", r.RemoteAddr).Msg("AuthMiddleware: self-issued token expired")
+					span.SetStatus(codes.Error, "Self-issued token expired")
+					http.Error(w, `{"error":"invalid_token"}`, http.StatusUnauthorized)
+					return
+				}
+				for header, value := range si.Claims {
+					r.Header.Set(header, value)
+				}
+				for header, value := range p.cfg.IDP.FixedHeaders {
+					r.Header.Set(header, value)
+				}
+				ctx = context.WithValue(ctx, keyRealToken, token)
+				span.AddEvent("Self-issued token validated")
+				span.SetStatus(codes.Ok, "Authentication successful")
+				next.ServeHTTP(w, r.WithContext(ctx))
+				return
+			}
 
 			jwtToken, err := p.auth.ValidateJWT(ctx, string(data))
 			if err != nil || !jwtToken.Valid {
@@ -130,7 +159,6 @@ func (p *proxy) AuthMiddleware() func(http.Handler) http.Handler {
 
 			span.AddEvent("JWT validated")
 
-			// Extract claims
 			claims, ok := jwtToken.Claims.(jwt.MapClaims)
 			if !ok {
 				utility.Logger.Warn().Str("remote_addr", r.RemoteAddr).Msg("AuthMiddleware: failed to parse JWT claims")
@@ -139,7 +167,6 @@ func (p *proxy) AuthMiddleware() func(http.Handler) http.Handler {
 				return
 			}
 
-			// Add subject to span attributes
 			if sub, ok := claims["sub"].(string); ok {
 				span.SetAttributes(attribute.String("user.id", sub))
 				utility.Logger.Info().Str("sub", sub).Str("remote_addr", r.RemoteAddr).Msg("AuthMiddleware: authentication successful")
@@ -165,7 +192,7 @@ func (p *proxy) AuthMiddleware() func(http.Handler) http.Handler {
 	}
 }
 
-// ProxyHandler forwards request to correct upstream
+// ProxyHandler attaches tracing attributes and delegates to the reverse proxy.
 func (p *proxy) ProxyHandler(w http.ResponseWriter, r *http.Request) {
 	_, span := p.tracer.Start(r.Context(), "proxy.ProxyHandler")
 	defer span.End()
@@ -187,7 +214,6 @@ func (p *proxy) ProxyHandler(w http.ResponseWriter, r *http.Request) {
 	p.reverseProxy.ServeHTTP(w, r)
 }
 
-// extractBearerToken extracts token from Authorization header
 func extractBearerToken(r *http.Request) (string, bool) {
 	auth := r.Header.Get("Authorization")
 	if auth == "" || !strings.HasPrefix(auth, "Bearer ") {

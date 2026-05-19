@@ -19,6 +19,7 @@ Janus risolve questo problema crittografando ogni JWT dell'IdP in un **token bea
 - **Validazione JWT** -- validazione completa dei claim (scadenza, audience, issuer) con recupero chiavi JWKS
 - **Mappatura claims-to-headers** -- iniezione configurabile dei claim IdP negli header HTTP upstream
 - **Credenziali client crittografate** -- la registrazione dinamica restituisce `client_id` / `client_secret` crittografati con AEAD
+- **Modalità token self-issued** -- Janus può emettere token propri a lunga durata (TTL configurabile) con i claim cifrati incorporati; nessuna chiamata all'IdP per richiesta e nessun refresh necessario — progettato per client MCP come Claude e ChatGPT che non supportano il refresh dei token
 
 ### Conformità agli Standard
 
@@ -127,6 +128,39 @@ Consulta [docs/testing-guide.md](docs/testing-guide.md) per la guida completa ai
 5. **Richieste autenticate** -- il client invia `Authorization: Bearer <opaque>` a `GET/POST /mcp/*`. Il proxy decripta, valida il JWT, mappa i claims negli header e inoltra con il token reale.
 6. **Refresh** -- il client chiama `POST /refresh` con il refresh token crittografato. Il proxy decripta, effettua il refresh con l'IdP, ri-cripta e restituisce un nuovo bearer opaco.
 
+### Modalità token self-issued (`token_behavior: self_issued`)
+
+Alcuni client MCP (Claude, ChatGPT) completano il flusso OAuth una sola volta e non chiamano mai `/refresh`. Con la modalità predefinita `proxy`, le sessioni scadono alla scadenza del token dell'IdP (tipicamente 1 ora). La modalità `self_issued` risolve questo problema:
+
+1. Dopo lo scambio iniziale con l'IdP, il JWT viene validato **una sola volta** e i claims vengono estratti e mappati.
+2. Janus emette un token opaco proprio contenente i **claim mappati cifrati** e una scadenza controllata da Janus (`token_ttl`).
+3. Ad ogni richiesta successiva il proxy decripta il token, verifica la scadenza e inietta i claim come header — **nessuna chiamata JWKS, nessun contatto con l'IdP**.
+4. Se `/refresh` viene chiamato (da client che lo supportano), viene emesso un nuovo access token dagli stessi claim cifrati fino al limite `token_max_ttl` senza contattare l'IdP.
+
+```text
+MCP Client                        MCP Janus Proxy                    Upstream MCP Server
+    │                                    │                                    │
+    │  Authorization: Bearer <opaque>    │                                    │
+    │ ──────────────────────────────────>│                                    │
+    │                                    │ 1. Decripta token opaco (AES-GCM)  │
+    │                                    │ 2. Verifica scadenza (locale)      │
+    │                                    │ 3. Inietta claim-header pre-mappati│
+    │                                    │                                    │
+    │                                    │  Authorization: Bearer <opaque>    │
+    │                                    │  X-Sub: user123                    │
+    │                                    │ ──────────────────────────────────>│
+```
+
+**Trade-off rispetto alla modalità `proxy`:**
+
+| | `proxy` | `self_issued` |
+|---|---|---|
+| Durata token | Controllata dall'IdP (es. 1h) | Controllata da Janus (es. 720h) |
+| Revoca IdP efficace entro | ~1h | fino a `token_ttl` |
+| Chiamata JWKS per richiesta | sì (con cache) | no |
+| Freschezza dei claim | ad ogni richiesta | congelati al login |
+| Client senza supporto refresh | sessione scade ogni ora | durata intera di `token_ttl` |
+
 ### Dettaglio crittografia dei token
 
 - **Algoritmo**: AES-256-GCM (AEAD -- crittografia autenticata con dati associati)
@@ -164,6 +198,9 @@ proxy:
     enabled: false                       # impostare a true per client browser (es. MCP Inspector)
     allowed_origins:
       - http://localhost:6274            # origin predefinita di MCP Inspector
+  token_behavior: proxy                  # proxy (default) | self_issued
+  token_ttl: 24h                         # [self_issued] durata di ogni access token
+  token_max_ttl: 168h                    # [self_issued] finestra massima dal login originale; il refresh viene negato dopo
 
 idp:
   client_id: your-idp-client-id         # OAuth client ID presso l'IdP
@@ -203,6 +240,9 @@ export MCP_IDP_CLIENT_SECRET="your-secret"
 export MCP_PROXY_BASE_URL="https://proxy.example.com"
 export MCP_ENCRYPTION_MASTER_KEY="$(openssl rand -hex 32)"
 export MCP_PROXY_CORS_ENABLED=true          # abilita CORS (configurare le origini in config.yaml)
+export MCP_TOKEN_BEHAVIOR=self_issued       # abilita la modalità token self-issued
+export MCP_TOKEN_TTL=720h                   # durata token 30 giorni
+export MCP_TOKEN_MAX_TTL=720h               # finestra massima corrispondente
 ```
 
 Consulta [.env.example](.env.example) per tutte le variabili supportate.

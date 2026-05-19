@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
@@ -171,6 +172,34 @@ func TestLoad(t *testing.T) {
 		assert.Equal(t, "mcp-proxy", cfg.Telemetry.ServiceName)
 		assert.Equal(t, "1.0.0", cfg.Telemetry.ServiceVersion)
 		assert.Equal(t, "localhost:4317", cfg.Telemetry.OTLPEndpoint)
+
+		// token_behavior defaults to "proxy" when omitted
+		assert.Equal(t, TokenBehaviorProxy, cfg.Proxy.TokenBehavior)
+		assert.Equal(t, 24*time.Hour, cfg.Proxy.TokenTTL)
+		assert.Equal(t, 7*24*time.Hour, cfg.Proxy.TokenMaxTTL)
+	})
+
+	t.Run("token_behavior omitted defaults to proxy", func(t *testing.T) {
+		// Explicit check: no token_behavior key in YAML at all
+		dir := writeConfigFile(t, minimalConfig)
+		resetViperAndChdir(t, dir)
+
+		cfg, err := Load()
+		require.NoError(t, err)
+
+		assert.Equal(t, TokenBehaviorProxy, cfg.Proxy.TokenBehavior)
+		assert.NotEqual(t, TokenBehaviorSelfIssued, cfg.Proxy.TokenBehavior)
+	})
+
+	t.Run("env var MCP_TOKEN_BEHAVIOR overrides to self_issued", func(t *testing.T) {
+		dir := writeConfigFile(t, minimalConfig)
+		resetViperAndChdir(t, dir)
+		t.Setenv("MCP_TOKEN_BEHAVIOR", "self_issued")
+
+		cfg, err := Load()
+		require.NoError(t, err)
+
+		assert.Equal(t, TokenBehaviorSelfIssued, cfg.Proxy.TokenBehavior)
 	})
 
 	t.Run("env var overrides client secret", func(t *testing.T) {

@@ -51,12 +51,19 @@ type AccessTokenRequest struct {
 	GrantTypes   string `json:"grant_type" form:"grant_type"`
 }
 
-type ClientIdData struct {
+type RefreshTokenRequest struct {
+	GrantType    string `json:"grant_type"    form:"grant_type"`
+	RefreshToken string `json:"refresh_token" form:"refresh_token"`
+	ClientID     string `json:"client_id"     form:"client_id"`
+	ClientSecret string `json:"client_secret" form:"client_secret"`
+}
+
+type ClientIDData struct {
 	RedirectURIs []string `json:"r"`
 	Secret       string   `json:"s"`
 }
 
-func (c *ClientIdData) Encode(encryption utility.Encryption) (string, error) {
+func (c *ClientIDData) Encode(encryption utility.Encryption) (string, error) {
 	dataJSON, err := json.Marshal(c)
 	if err != nil {
 		return "", err
@@ -69,17 +76,51 @@ func (c *ClientIdData) Encode(encryption utility.Encryption) (string, error) {
 	return encrypted, nil
 }
 
-func DecodeClientID(encrypted string, encryption utility.Encryption) (*ClientIdData, error) {
+func DecodeClientID(encrypted string, encryption utility.Encryption) (*ClientIDData, error) {
 	data, err := encryption.Decrypt(encrypted)
 	if err != nil {
 		return nil, err
 	}
-	var cid ClientIdData
+	var cid ClientIDData
 	if err := json.Unmarshal(data, &cid); err != nil {
 		return nil, err
 	}
 
 	return &cid, nil
+}
+
+type SelfIssuedTokenData struct {
+	Type      string            `json:"t"`
+	ExpiresAt int64             `json:"exp"`
+	IssuedAt  int64             `json:"iat"`
+	Claims    map[string]string `json:"cl"`
+}
+
+func (s *SelfIssuedTokenData) Encode(encryption utility.Encryption) (string, error) {
+	data, err := json.Marshal(s)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal self-issued token: %w", err)
+	}
+	encrypted, err := encryption.Encrypt(data)
+	if err != nil {
+		return "", fmt.Errorf("failed to encrypt self-issued token: %w", err)
+	}
+	return encrypted, nil
+}
+
+func DecodeSelfIssuedToken(encrypted string, encryption utility.Encryption) (*SelfIssuedTokenData, error) {
+	data, err := encryption.Decrypt(encrypted)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decrypt self-issued token: %w", err)
+	}
+	var si SelfIssuedTokenData
+	if err := json.Unmarshal(data, &si); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal self-issued token: %w", err)
+	}
+	if si.Type != "si" {
+		return nil, fmt.Errorf("not a self-issued token")
+	}
+	return &si, nil
 }
 
 type StateData struct {
