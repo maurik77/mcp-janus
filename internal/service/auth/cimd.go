@@ -16,12 +16,26 @@ const cimdCacheTTL = 5 * time.Minute
 // ClientMetadataDocument is the OAuth Client ID Metadata Document
 // (draft-ietf-oauth-client-id-metadata-document-00).
 type ClientMetadataDocument struct {
-	ClientID                string   `json:"client_id"`
-	ClientName              string   `json:"client_name"`
-	RedirectURIs            []string `json:"redirect_uris"`
-	GrantTypes              []string `json:"grant_types,omitempty"`
-	ResponseTypes           []string `json:"response_types,omitempty"`
-	TokenEndpointAuthMethod string   `json:"token_endpoint_auth_method,omitempty"`
+	ClientID                    string   `json:"client_id"`
+	ClientName                  string   `json:"client_name"`
+	ClientURI                   string   `json:"client_uri,omitempty"`
+	LogoURI                     string   `json:"logo_uri,omitempty"`
+	RedirectURIs                []string `json:"redirect_uris"`
+	GrantTypes                  []string `json:"grant_types,omitempty"`
+	ResponseTypes               []string `json:"response_types,omitempty"`
+	TokenEndpointAuthMethod     string   `json:"token_endpoint_auth_method,omitempty"`
+	TokenEndpointAuthSigningAlg string   `json:"token_endpoint_auth_signing_alg,omitempty"`
+	JwksURI                     string   `json:"jwks_uri,omitempty"`
+	// ClientSecret must never be present in a valid CIMD document (spec §4).
+	ClientSecret string `json:"client_secret,omitempty"`
+}
+
+// forbiddenAuthMethods lists token_endpoint_auth_method values that are symmetric
+// (require a shared secret) and therefore prohibited in CIMD documents (spec §4).
+var forbiddenAuthMethods = map[string]bool{
+	"client_secret_basic": true,
+	"client_secret_post":  true,
+	"client_secret_jwt":   true,
 }
 
 type cimdCacheEntry struct {
@@ -112,6 +126,12 @@ func fetchCIMDDocumentRaw(rawURL string, client *http.Client, cache *cimdCache) 
 	if len(doc.RedirectURIs) == 0 {
 		return nil, fmt.Errorf("client metadata document missing required field: redirect_uris")
 	}
+	if doc.ClientSecret != "" {
+		return nil, fmt.Errorf("client metadata document must not contain client_secret")
+	}
+	if forbiddenAuthMethods[doc.TokenEndpointAuthMethod] {
+		return nil, fmt.Errorf("client metadata document uses forbidden auth method: %q", doc.TokenEndpointAuthMethod)
+	}
 
 	cache.set(rawURL, &doc)
 	return &doc, nil
@@ -123,4 +143,45 @@ func fetchAndValidateCIMD(rawURL string, client *http.Client, cache *cimdCache) 
 		return nil, err
 	}
 	return fetchCIMDDocumentRaw(rawURL, client, cache)
+}
+
+// redirectURIMatchesRegistered checks whether the requested redirect URI matches
+// one of the registered URIs in the document.  When portInsensitive is true,
+// localhost / 127.0.0.1 URIs are compared ignoring the port component — this
+// accommodates Claude Code's published CIMD document, which lists portless URIs
+// (http://localhost/callback) while the actual callback server listens on a
+// dynamically chosen port (e.g. http://localhost:3118/callback).
+func redirectURIMatchesRegistered(requested string, registered []string, portInsensitive bool) bool {
+	for _, r := range registered {
+		if r == requested {
+			return true
+		}
+		if portInsensitive && localhostPortInsensitiveMatch(r, requested) {
+			return true
+		}
+	}
+	return false
+}
+
+// localhostPortInsensitiveMatch returns true when both URIs share the same scheme,
+// a localhost / 127.0.0.1 host, and the same path+query — ignoring port.
+func localhostPortInsensitiveMatch(registered, requested string) bool {
+	reg, err1 := url.Parse(registered)
+	req, err2 := url.Parse(requested)
+	if err1 != nil || err2 != nil {
+		return false
+	}
+	if reg.Scheme != req.Scheme {
+		return false
+	}
+	regHost := reg.Hostname()
+	reqHost := req.Hostname()
+	if !isLocalhost(regHost) || !isLocalhost(reqHost) {
+		return false
+	}
+	return reg.Path == req.Path && reg.RawQuery == req.RawQuery
+}
+
+func isLocalhost(host string) bool {
+	return host == "localhost" || host == "127.0.0.1"
 }

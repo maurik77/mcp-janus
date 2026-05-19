@@ -28,10 +28,11 @@ type ProxyAuthHandler struct {
 	openidConfiguration *OpenIDConfiguration
 	jwks                *JWKS
 	jwksMu              sync.RWMutex
-	tracer       trace.Tracer
-	httpClient   *http.Client
-	cimdCache    *cimdCache
-	cimdFetcher  func(url string, client *http.Client, cache *cimdCache) (*ClientMetadataDocument, error)
+	tracer              trace.Tracer
+	httpClient          *http.Client
+	cimdCache           *cimdCache
+	cimdFetcher         func(url string, client *http.Client, cache *cimdCache) (*ClientMetadataDocument, error)
+	jtiStore            *jtiStore
 }
 
 // withRetry calls fn up to attempts times, waiting delay between failures.
@@ -98,9 +99,10 @@ func New(cfg config.Config, encryption utility.Encryption) (Service, error) {
 		openidConfiguration: openidConfiguration,
 		jwks:                jwks,
 		tracer:              otel.Tracer("mcp-proxy.auth"),
-		httpClient:  newHTTPClient(cfg.IDP.SkipTLSVerify),
-		cimdCache:   &cimdCache{entries: make(map[string]cimdCacheEntry)},
-		cimdFetcher: fetchAndValidateCIMD,
+		httpClient:          newHTTPClient(cfg.IDP.SkipTLSVerify),
+		cimdCache:           &cimdCache{entries: make(map[string]cimdCacheEntry)},
+		cimdFetcher:         fetchAndValidateCIMD,
+		jtiStore:            newJTIStore(),
 	}
 	utility.Logger.Info().
 		Str("issuer", openidConfiguration.Issuer).
@@ -155,6 +157,7 @@ func (s *ProxyAuthHandler) AuthenticateRequest(ctx context.Context, req *Authent
 		attribute.String("code_challenge_method", req.CodeChallengeMethod),
 	)
 
+	portInsensitive := s.config.Proxy.CIMDLocalhostPortInsensitive
 	if isURLClientID(req.ClientID) {
 		doc, err := s.cimdFetcher(req.ClientID, s.httpClient, s.cimdCache)
 		if err != nil {
@@ -163,7 +166,7 @@ func (s *ProxyAuthHandler) AuthenticateRequest(ctx context.Context, req *Authent
 			utility.Logger.Warn().Err(err).Str("client_id", req.ClientID).Msg("AuthenticateRequest: CIMD fetch failed")
 			return "", fmt.Errorf("invalid_client")
 		}
-		if !slices.Contains(doc.RedirectURIs, req.RedirectURI) {
+		if !redirectURIMatchesRegistered(req.RedirectURI, doc.RedirectURIs, portInsensitive) {
 			span.SetStatus(codes.Error, "Invalid redirect URI")
 			utility.Logger.Warn().Str("client_id", req.ClientID).Str("redirect_uri", req.RedirectURI).Msg("AuthenticateRequest: redirect_uri not in CIMD document")
 			return "", fmt.Errorf("invalid_request")
@@ -190,6 +193,7 @@ func (s *ProxyAuthHandler) AuthenticateRequest(ctx context.Context, req *Authent
 		OriginalState: req.State,
 		RedirectURI:   req.RedirectURI,
 		ClientID:      req.ClientID,
+		Resource:      req.Resource,
 	}
 
 	encryptedState, err := stateData.Encode(s.encryption)
@@ -201,12 +205,15 @@ func (s *ProxyAuthHandler) AuthenticateRequest(ctx context.Context, req *Authent
 	}
 
 	// Redirect to real IdP
-	authURL := s.oauthConfig.AuthCodeURL(
-		encryptedState,
+	authParams := []oauth2.AuthCodeOption{
 		oauth2.SetAuthURLParam("code_challenge", req.CodeChallenge),
 		oauth2.SetAuthURLParam("code_challenge_method", req.CodeChallengeMethod),
 		oauth2.SetAuthURLParam("redirect_uri", s.config.Proxy.BaseURL+"/callback"),
-	)
+	}
+	if req.Resource != "" {
+		authParams = append(authParams, oauth2.SetAuthURLParam("resource", req.Resource))
+	}
+	authURL := s.oauthConfig.AuthCodeURL(encryptedState, authParams...)
 
 	span.SetStatus(codes.Ok, "Authentication request successful")
 
@@ -227,6 +234,8 @@ func (s *ProxyAuthHandler) ManageAuthorizationCode(ctx context.Context, req *Aut
 		return nil, nil, fmt.Errorf("invalid_request")
 	}
 
+	portInsensitive := s.config.Proxy.CIMDLocalhostPortInsensitive
+
 	// Validate redirect URI against registered client or CIMD document
 	if isURLClientID(stateData.ClientID) {
 		doc, err := s.cimdFetcher(stateData.ClientID, s.httpClient, s.cimdCache)
@@ -234,7 +243,7 @@ func (s *ProxyAuthHandler) ManageAuthorizationCode(ctx context.Context, req *Aut
 			utility.Logger.Warn().Err(err).Str("client_id", stateData.ClientID).Msg("ManageAuthorizationCode: CIMD fetch failed")
 			return nil, nil, fmt.Errorf("invalid_request")
 		}
-		if !slices.Contains(doc.RedirectURIs, stateData.RedirectURI) {
+		if !redirectURIMatchesRegistered(stateData.RedirectURI, doc.RedirectURIs, portInsensitive) {
 			utility.Logger.Warn().Str("client_id", stateData.ClientID).Str("redirect_uri", stateData.RedirectURI).Msg("ManageAuthorizationCode: redirect_uri not in CIMD document")
 			return nil, nil, fmt.Errorf("invalid_request")
 		}
@@ -270,6 +279,15 @@ func (s *ProxyAuthHandler) ManageAuthorizationCode(ctx context.Context, req *Aut
 		Code:  req.Code,
 	}
 
+	// Append iss to redirect (RFC 9207 §2): binds the auth response to this AS.
+	issuer := s.config.Proxy.Issuer
+	if issuer == "" {
+		issuer = s.config.Proxy.BaseURL
+	}
+	q := redirectURL.Query()
+	q.Set("iss", issuer)
+	redirectURL.RawQuery = q.Encode()
+
 	utility.Logger.Info().
 		Str("client_id", stateData.ClientID).
 		Str("redirect_uri", redirectURL.String()).
@@ -294,24 +312,13 @@ func (s *ProxyAuthHandler) RetrieveAccessToken(ctx context.Context, req *AccessT
 		return nil, fmt.Errorf("invalid_request")
 	}
 
-	if req.ClientID != "" && !isURLClientID(req.ClientID) {
-		span.SetAttributes(
-			attribute.String("client.id", req.ClientID),
-		)
-
-		clientData, err := DecodeClientID(req.ClientID, s.encryption)
-
-		if err != nil {
+	if req.ClientID != "" {
+		span.SetAttributes(attribute.String("client.id", req.ClientID))
+		if err := s.validateClientAuth(ctx, req); err != nil {
 			span.RecordError(err)
-			span.SetStatus(codes.Error, "Failed to decode client ID")
-			utility.Logger.Warn().Err(err).Str("client_id", req.ClientID).Msg("RetrieveAccessToken: failed to decode client_id")
+			span.SetStatus(codes.Error, "Client authentication failed")
+			utility.Logger.Warn().Err(err).Str("client_id", req.ClientID).Msg("RetrieveAccessToken: client authentication failed")
 			return nil, err
-		}
-
-		if clientData.Secret != req.ClientSecret {
-			span.SetStatus(codes.Error, "Invalid client secret")
-			utility.Logger.Warn().Str("client_id", req.ClientID).Msg("RetrieveAccessToken: client secret mismatch")
-			return nil, fmt.Errorf("invalid_request")
 		}
 	}
 
@@ -321,12 +328,14 @@ func (s *ProxyAuthHandler) RetrieveAccessToken(ctx context.Context, req *AccessT
 		httpClient = http.DefaultClient
 	}
 	oauthCtx := context.WithValue(ctx, oauth2.HTTPClient, httpClient)
-	token, err := s.oauthConfig.Exchange(
-		oauthCtx,
-		req.Code,
+	exchangeParams := []oauth2.AuthCodeOption{
 		oauth2.SetAuthURLParam("grant_type", req.GrantTypes),
 		oauth2.SetAuthURLParam("code_verifier", req.CodeVerifier),
-	)
+	}
+	if req.Resource != "" {
+		exchangeParams = append(exchangeParams, oauth2.SetAuthURLParam("resource", req.Resource))
+	}
+	token, err := s.oauthConfig.Exchange(oauthCtx, req.Code, exchangeParams...)
 
 	if err != nil {
 		span.RecordError(err)
@@ -503,6 +512,105 @@ func (s *ProxyAuthHandler) ValidateJWT(ctx context.Context, tokenString string) 
 	return token, nil
 }
 
+// validateClientAuth authenticates the client at the token endpoint.
+// Supports three modes:
+//  1. CIMD URL client_id with private_key_jwt assertion (ChatGPT pattern)
+//  2. CIMD URL client_id without assertion → public client, PKCE-only, no secret needed
+//  3. Opaque encrypted client_id → validate stored secret
+func (s *ProxyAuthHandler) validateClientAuth(ctx context.Context, req *AccessTokenRequest) error {
+	const assertionType = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
+
+	if isURLClientID(req.ClientID) {
+		if req.ClientAssertionType == assertionType && req.ClientAssertion != "" {
+			return s.validatePrivateKeyJWT(ctx, req)
+		}
+		// Public CIMD client — PKCE is the only authentication factor; no secret needed.
+		return nil
+	}
+
+	// Opaque encrypted client_id (DCR path).
+	clientData, err := DecodeClientID(req.ClientID, s.encryption)
+	if err != nil {
+		return fmt.Errorf("invalid_request")
+	}
+	if clientData.Secret != req.ClientSecret {
+		return fmt.Errorf("invalid_client")
+	}
+	return nil
+}
+
+// validatePrivateKeyJWT verifies a client_assertion JWT per RFC 7523.
+// It fetches the client's JWKS from the CIMD document's jwks_uri, then validates:
+//   - iss == sub == client_id
+//   - aud contains the token endpoint URL
+//   - exp not in the past
+//   - jti not previously seen (replay protection)
+func (s *ProxyAuthHandler) validatePrivateKeyJWT(_ context.Context, req *AccessTokenRequest) error {
+	doc, err := s.cimdFetcher(req.ClientID, s.httpClient, s.cimdCache)
+	if err != nil {
+		return fmt.Errorf("invalid_client")
+	}
+	if doc.JwksURI == "" {
+		utility.Logger.Warn().Str("client_id", req.ClientID).Msg("validatePrivateKeyJWT: CIMD doc has no jwks_uri")
+		return fmt.Errorf("invalid_client")
+	}
+
+	jwks, err := fetchJWKS(doc.JwksURI, false)
+	if err != nil {
+		utility.Logger.Warn().Err(err).Str("jwks_uri", doc.JwksURI).Msg("validatePrivateKeyJWT: failed to fetch client JWKS")
+		return fmt.Errorf("invalid_client")
+	}
+
+	tokenEndpoint := s.config.Proxy.BaseURL + "/token"
+
+	token, err := jwt.Parse(req.ClientAssertion, func(t *jwt.Token) (any, error) {
+		kid, _ := t.Header["kid"].(string)
+		key := jwks.GetKeyByKID(kid)
+		if key == nil {
+			return nil, fmt.Errorf("key %q not found in client JWKS", kid)
+		}
+		return key, nil
+	})
+	if err != nil || !token.Valid {
+		utility.Logger.Warn().Err(err).Str("client_id", req.ClientID).Msg("validatePrivateKeyJWT: JWT parse/validation failed")
+		return fmt.Errorf("invalid_client")
+	}
+
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		return fmt.Errorf("invalid_client")
+	}
+
+	iss, _ := claims["iss"].(string)
+	sub, _ := claims["sub"].(string)
+	if iss != req.ClientID || sub != req.ClientID {
+		utility.Logger.Warn().Str("iss", iss).Str("sub", sub).Str("client_id", req.ClientID).Msg("validatePrivateKeyJWT: iss/sub mismatch")
+		return fmt.Errorf("invalid_client")
+	}
+
+	if !jwtAudienceContains(claims, tokenEndpoint) {
+		utility.Logger.Warn().Str("client_id", req.ClientID).Msg("validatePrivateKeyJWT: audience mismatch")
+		return fmt.Errorf("invalid_client")
+	}
+
+	jti, _ := claims["jti"].(string)
+	if jti == "" {
+		utility.Logger.Warn().Str("client_id", req.ClientID).Msg("validatePrivateKeyJWT: missing jti")
+		return fmt.Errorf("invalid_client")
+	}
+
+	exp, err := claims.GetExpirationTime()
+	if err != nil || exp == nil {
+		return fmt.Errorf("invalid_client")
+	}
+	if s.jtiStore.Seen(jti, exp.Time) {
+		utility.Logger.Warn().Str("jti", jti).Msg("validatePrivateKeyJWT: replayed jti")
+		return fmt.Errorf("invalid_client")
+	}
+
+	return nil
+}
+
 // refreshJWKS re-fetches the JWKS from the IdP.
 func (s *ProxyAuthHandler) refreshJWKS() error {
 	jwks, err := fetchJWKS(s.openidConfiguration.JWKSEndpoint, s.config.IDP.SkipTLSVerify)
@@ -514,4 +622,24 @@ func (s *ProxyAuthHandler) refreshJWKS() error {
 	s.jwksMu.Unlock()
 	utility.Logger.Info().Msg("JWKS refreshed successfully")
 	return nil
+}
+
+// jwtAudienceContains reports whether the "aud" claim in claims contains target.
+// Per RFC 7519 §4.1.3, aud may be a single string or an array of strings.
+func jwtAudienceContains(claims jwt.MapClaims, target string) bool {
+	raw, ok := claims["aud"]
+	if !ok {
+		return false
+	}
+	switch v := raw.(type) {
+	case string:
+		return v == target
+	case []any:
+		for _, a := range v {
+			if s, ok := a.(string); ok && s == target {
+				return true
+			}
+		}
+	}
+	return false
 }

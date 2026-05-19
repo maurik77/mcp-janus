@@ -25,6 +25,7 @@ type AuthenticateRequest struct {
 	CodeChallenge       string `json:"code_challenge" form:"code_challenge"`
 	RedirectURI         string `json:"redirect_uri" form:"redirect_uri"`
 	CodeChallengeMethod string `json:"code_challenge_method" form:"code_challenge_method"`
+	Resource            string `json:"resource" form:"resource"`
 }
 
 type AuthorizationCodeData struct {
@@ -33,12 +34,15 @@ type AuthorizationCodeData struct {
 }
 
 type AccessTokenRequest struct {
-	Code         string `json:"code" form:"code"`
-	RedirectURI  string `json:"redirect_uri" form:"redirect_uri"`
-	ClientSecret string `json:"client_secret" form:"client_secret"`
-	CodeVerifier string `json:"code_verifier" form:"code_verifier"`
-	ClientID     string `json:"client_id" form:"client_id"`
-	GrantTypes   string `json:"grant_type" form:"grant_type"`
+	Code                string `json:"code" form:"code"`
+	RedirectURI         string `json:"redirect_uri" form:"redirect_uri"`
+	ClientSecret        string `json:"client_secret" form:"client_secret"`
+	CodeVerifier        string `json:"code_verifier" form:"code_verifier"`
+	ClientID            string `json:"client_id" form:"client_id"`
+	GrantTypes          string `json:"grant_type" form:"grant_type"`
+	Resource            string `json:"resource" form:"resource"`
+	ClientAssertionType string `json:"client_assertion_type" form:"client_assertion_type"`
+	ClientAssertion     string `json:"client_assertion" form:"client_assertion"`
 }
 
 type ClientIdData struct {
@@ -76,6 +80,7 @@ type StateData struct {
 	OriginalState string `json:"s"`
 	RedirectURI   string `json:"r"`
 	ClientID      string `json:"c"`
+	Resource      string `json:"res,omitempty"`
 }
 
 func (s *StateData) Encode(encryption utility.Encryption) (string, error) {

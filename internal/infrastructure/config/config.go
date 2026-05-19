@@ -40,6 +40,11 @@ type Proxy struct {
 	TLSKeyFile  string `mapstructure:"tls_key_file"`
 	LogLevel    string `mapstructure:"log_level"`
 	LogFormat   string `mapstructure:"log_format"`
+
+	// CIMD (OAuth Client ID Metadata Document) settings.
+	CIMDEnabled                 bool     `mapstructure:"cimd_enabled"`
+	CIMDAllowList               []string `mapstructure:"cimd_allow_list"`
+	CIMDLocalhostPortInsensitive bool    `mapstructure:"cimd_localhost_port_insensitive"`
 }
 
 type Telemetry struct {
@@ -151,6 +156,16 @@ func Load() (*Config, error) {
 
 	viper.SetDefault("idp.fetch_retry_attempts", 3)
 	viper.SetDefault("idp.fetch_retry_delay", "2s")
+
+	viper.SetDefault("proxy.cimd_enabled", true)
+	viper.SetDefault("proxy.cimd_localhost_port_insensitive", false)
+
+	if err := viper.BindEnv("proxy.cimd_enabled", "MCP_PROXY_CIMD_ENABLED"); err != nil {
+		return nil, err
+	}
+	if err := viper.BindEnv("proxy.cimd_localhost_port_insensitive", "MCP_PROXY_CIMD_LOCALHOST_PORT_INSENSITIVE"); err != nil {
+		return nil, err
+	}
 
 	if err := viper.ReadInConfig(); err != nil {
 		return nil, err
