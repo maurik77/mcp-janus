@@ -1,12 +1,15 @@
 package wire
 
 import (
+	"context"
+	"mcpproxy/internal/infrastructure/telemetry"
 	"mcpproxy/internal/service/auth"
 	"net/http"
 	"net/url"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/mock"
+	"go.opentelemetry.io/otel/metric/noop"
 	"golang.org/x/oauth2"
 )
 
@@ -16,6 +19,11 @@ type MockMetadataService struct {
 }
 
 func (m *MockMetadataService) OpenIDConfiguration() any {
+	args := m.Called()
+	return args.Get(0)
+}
+
+func (m *MockMetadataService) AuthorizationServerMetadata() any {
 	args := m.Called()
 	return args.Get(0)
 }
@@ -49,33 +57,33 @@ type MockAuthService struct {
 	mock.Mock
 }
 
-func (m *MockAuthService) RegisterClient(req *auth.RegisterRequest) (*auth.RegisterResponse, error) {
+func (m *MockAuthService) RegisterClient(ctx context.Context, req *auth.RegisterRequest) (*auth.RegisterResponse, error) {
 	args := m.Called(req)
 	return args.Get(0).(*auth.RegisterResponse), args.Error(1)
 }
 
-func (m *MockAuthService) ValidateJWT(tokenString string) (*jwt.Token, error) {
+func (m *MockAuthService) ValidateJWT(ctx context.Context, tokenString string) (*jwt.Token, error) {
 	args := m.Called(tokenString)
 	return args.Get(0).(*jwt.Token), args.Error(1)
 }
 
-func (m *MockAuthService) AuthenticateRequest(req *auth.AuthenticateRequest) (string, error) {
+func (m *MockAuthService) AuthenticateRequest(ctx context.Context, req *auth.AuthenticateRequest) (string, error) {
 	args := m.Called(req)
 	return args.String(0), args.Error(1)
 }
 
-func (m *MockAuthService) ManageAuthorizationCode(req *auth.AuthorizationCodeData) (*auth.AuthorizationCodeData, *url.URL, error) {
+func (m *MockAuthService) ManageAuthorizationCode(ctx context.Context, req *auth.AuthorizationCodeData) (*auth.AuthorizationCodeData, *url.URL, error) {
 	args := m.Called(req)
 	return args.Get(0).(*auth.AuthorizationCodeData), args.Get(1).(*url.URL), args.Error(2)
 }
 
-func (m *MockAuthService) RetrieveAccessToken(req *auth.AccessTokenRequest) (*oauth2.Token, error) {
+func (m *MockAuthService) RetrieveAccessToken(ctx context.Context, req *auth.AccessTokenRequest) (*oauth2.Token, error) {
 	args := m.Called(req)
 	return args.Get(0).(*oauth2.Token), args.Error(1)
 }
 
-func (m *MockAuthService) RefreshToken(refreshToken string) (*oauth2.Token, error) {
-	args := m.Called(refreshToken)
+func (m *MockAuthService) RefreshToken(ctx context.Context, req *auth.RefreshTokenRequest) (*oauth2.Token, error) {
+	args := m.Called(req)
 	return args.Get(0).(*oauth2.Token), args.Error(1)
 }
 
@@ -92,4 +100,11 @@ func (m *MockEncryption) Encrypt(data []byte) (string, error) {
 func (m *MockEncryption) Decrypt(encrypted string) ([]byte, error) {
 	args := m.Called(encrypted)
 	return args.Get(0).([]byte), args.Error(1)
+}
+
+// createTestMetrics creates a no-op metrics instance for testing
+func createTestMetrics() *telemetry.Metrics {
+	meter := noop.NewMeterProvider().Meter("test")
+	metrics, _ := telemetry.InitializeMetrics(meter)
+	return metrics
 }

@@ -3,7 +3,7 @@ package main
 
 import (
 	"context"
-	"log"
+	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"mcpproxy/internal/infrastructure/config"
+	"mcpproxy/internal/infrastructure/observability"
+	"mcpproxy/internal/infrastructure/telemetry"
 	"mcpproxy/internal/infrastructure/wire"
 	"mcpproxy/internal/server"
 	"mcpproxy/internal/service/auth"
@@ -20,34 +22,53 @@ import (
 
 func main() {
 	var err error
+
 	cfg, err := config.Load()
 	if err != nil {
-		log.Fatalf("Failed to load config: %v", err)
+		fmt.Print("Failed to load config")
+		os.Exit(1)
+	}
+
+	utility.ConfigureLogging(cfg.Proxy.LogLevel, cfg.Proxy.LogFormat)
+
+	// Initialize OpenTelemetry
+	ctx := context.Background()
+
+	telem, shutdownTelemetry, err := telemetry.Initialize(ctx, cfg.Telemetry)
+	if err != nil {
+		utility.Logger.Fatal().Err(err).Msg("Failed to initialize telemetry")
+	}
+	defer shutdownTelemetry()
+
+	// Initialize metrics
+	metrics, err := telemetry.InitializeMetrics(telem.Meter)
+	if err != nil {
+		utility.Logger.Fatal().Err(err).Msg("Failed to initialize metrics")
 	}
 
 	encryption, err := utility.NewEncryption(cfg)
 	if err != nil {
-		log.Fatalf("Failed to initialize encryption: %v", err)
+		utility.Logger.Fatal().Err(err).Msg("Failed to initialize encryption")
 	}
 
 	authService, err := auth.New(*cfg, encryption)
 	if err != nil {
-		log.Fatalf("Failed to initialize auth handler: %v", err)
+		utility.Logger.Fatal().Err(err).Msg("Failed to initialize auth handler")
 	}
 
 	metadataService, err := metadata.New(*cfg)
 	if err != nil {
-		log.Fatalf("Failed to initialize metadata handler: %v", err)
+		utility.Logger.Fatal().Err(err).Msg("Failed to initialize metadata handler")
 	}
 
 	proxy, err := server.NewProxy(*cfg, metadataService, authService, encryption)
 	if err != nil {
-		log.Fatalf("Failed to initialize proxy: %v", err)
+		utility.Logger.Fatal().Err(err).Msg("Failed to initialize proxy")
 	}
 
-	r, err := wire.NewGinEngine(cfg, authService, metadataService, proxy, encryption)
+	r, err := wire.NewGinEngine(cfg, authService, metadataService, proxy, encryption, metrics)
 	if err != nil {
-		log.Fatalf("Failed to initialize Gin engine: %v", err)
+		utility.Logger.Fatal().Err(err).Msg("Failed to initialize Gin engine")
 	}
 
 	srv := &http.Server{
@@ -55,9 +76,11 @@ func main() {
 		Handler: r,
 	}
 
+	probeSrv := observability.NewProbeServer(cfg.Proxy.ProbeAddr)
+
 	go func() {
-		log.Printf("MCP Proxy Server starting on %s", cfg.Proxy.ListenAddr)
-		log.Printf("Base URL: %s", cfg.Proxy.BaseURL)
+		utility.Logger.Info().Str("addr", cfg.Proxy.ListenAddr).Msg("MCP Proxy Server starting")
+		utility.Logger.Info().Str("base_url", cfg.Proxy.BaseURL).Msg("Base URL")
 
 		var err error
 
@@ -68,20 +91,25 @@ func main() {
 		}
 
 		if err != nil && err != http.ErrServerClosed {
-			log.Fatalf("Server failed: %v", err)
+			utility.Logger.Fatal().Err(err).Msg("Server failed")
 		}
 	}()
+
+	probeSrv.Start()
 
 	// Graceful shutdown
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 	<-stop
 
-	log.Println("Shutting down server...")
+	utility.Logger.Info().Msg("Shutting down server...")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(ctx); err != nil {
-		log.Fatalf("Server forced to shutdown: %v", err)
+		utility.Logger.Fatal().Err(err).Msg("Server forced to shutdown")
 	}
-	log.Println("Server stopped.")
+	if err := probeSrv.Shutdown(ctx); err != nil {
+		utility.Logger.Fatal().Err(err).Msg("Probe server forced to shutdown")
+	}
+	utility.Logger.Info().Msg("Server stopped.")
 }

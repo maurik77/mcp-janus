@@ -1,13 +1,21 @@
 proxy:
   base_url: http://localhost:8080
   listen_addr: ":8080"
+  cors:
+    enabled: false
+    allowed_origins:
+      - http://localhost:6274   # MCP Inspector default origin
+    # allow_credentials: false
+    # max_age: 12h
 
 idp:
   client_id: 379eab96-a9ad-401f-8158-19b130fefbf3
   client_secret: supersecret123
   openid_configuration_url: https://swelfad01azne.b2clogin.com/swelfad01azne.onmicrosoft.com/v2.0/.well-known/openid-configuration?p=B2C_1A_HOME_REALM_DISCOVERY
+  jwt_leeway: 60s  # in seconds
   scopes:
     - openid
+    - offline_access
     - profile
     - 379eab96-a9ad-401f-8158-19b130fefbf3
   claims_mapping:
@@ -18,6 +26,12 @@ idp:
 
 encryption:
   master_key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+
+telemetry:
+  enabled: true
+  service_name: mcp-proxy
+  service_version: 1.0.0
+  otlp_endpoint: localhost:4318
 
 upstream:
   name: weather-test

@@ -1,5 +1,5 @@
 # Dockerfile for MCP Proxy
-FROM golang:1.21-alpine AS builder
+FROM golang:1.25-alpine AS builder
 
 WORKDIR /build
 
@@ -10,18 +10,16 @@ RUN go mod download
 # Copy source code
 COPY . .
 
+ARG GOARCH=amd64
+
 # Build
-RUN CGO_ENABLED=0 GOOS=linux go build -o mcpproxy ./cmd/proxy
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=${GOARCH} go build -o mcpproxy ./cmd/proxy
 
 # Final stage
-FROM alpine:latest
-
-RUN apk --no-cache add ca-certificates
-
+FROM scratch
 WORKDIR /app
+EXPOSE 8080 2113
 
 COPY --from=builder /build/mcpproxy .
-
-EXPOSE 8080
 
 CMD ["./mcpproxy"]

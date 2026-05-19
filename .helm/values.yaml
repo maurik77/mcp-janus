@@ -1,0 +1,88 @@
+# Number of pod replicas.
+replicaCount: 1
+
+image:
+  # Container image repository.
+  repository: mcp-janus
+  # Image tag.
+  tag: latest
+  # Image pull policy: Always, IfNotPresent, Never.
+  pullPolicy: IfNotPresent
+
+service:
+  # Kubernetes Service type: ClusterIP, NodePort, LoadBalancer.
+  type: ClusterIP
+  # Port exposed by the Service (maps to the proxy listen port).
+  port: 8080
+
+proxy:
+  issuer: "http://mcp-janus:8080"
+  # Externally reachable base URL of this proxy, used in OAuth redirect URIs.
+  baseUrl: "http://mcp-janus:8080"
+  # Address and port the proxy HTTP server binds to inside the container.
+  listenAddr: ":8080"
+  # Address and port for the Kubernetes liveness/readiness probe server.
+  probeAddr: ":2113"
+  # Log level: debug, info, warn, error.
+  logLevel: "info"
+  # Log format: json, text.
+  logFormat: "json"
+  # Enable TLS on the proxy listener. Requires tlsCertFile and tlsKeyFile in config.
+  tls: false
+
+idp:
+  # OAuth 2.1 client ID registered with the Identity Provider.
+  clientId: ""
+  # OpenID Connect discovery URL of the Identity Provider.
+  # Example: https://login.microsoftonline.com/<tenant>/v2.0/.well-known/openid-configuration
+  openidConfigurationUrl: ""
+  # Allowed clock skew when validating JWT expiry claims.
+  jwtLeeway: "60s"
+  # OAuth scopes requested during the authorization code flow.
+  # Example: [openid, offline_access, profile]
+  scopes: []
+  # Mapping of IdP JWT claim names to HTTP header names injected into upstream requests.
+  # Example: { sub: X_sub, email: X_email, upn: X_upn }
+  claimsMapping: {}
+
+encryption:
+  # Never set masterKey here — it is always injected via MCP_ENCRYPTION_MASTER_KEY env var
+  # from a Kubernetes Secret (see env section below).
+  masterKey: ""
+
+telemetry:
+  # Enable OpenTelemetry tracing and metrics export.
+  enabled: true
+  # Service name reported in traces and metrics.
+  serviceName: "mcp-proxy"
+  # Service version reported in traces and metrics.
+  serviceVersion: "1.0.0"
+  # OTLP gRPC endpoint for the OpenTelemetry Collector.
+  otlpEndpoint: "localhost:4317"
+
+upstream:
+  # Logical name of the upstream MCP server.
+  name: ""
+  # OAuth resource identifier of the upstream server (used in audience validation).
+  resource: ""
+  # Base URL of the upstream MCP server.
+  baseUrl: ""
+  # Path prefix under which MCP requests are proxied.
+  pathPrefix: "/mcp"
+
+# Extra environment variables injected into the proxy container.
+# Supports plain values and any valueFrom source (secretKeyRef, configMapKeyRef, fieldRef, etc.).
+# Secrets referenced here must be created manually before deploying the chart.
+# Example:
+# env:
+#   - name: MCP_IDP_CLIENT_SECRET
+#     valueFrom:
+#       secretKeyRef:
+#         name: mcp-janus-secrets
+#         key: idp-client-secret
+#   - name: MCP_ENCRYPTION_MASTER_KEY
+#     valueFrom:
+#       secretKeyRef:
+#         name: mcp-janus-secrets
+#         key: encryption-master-key
+env: []

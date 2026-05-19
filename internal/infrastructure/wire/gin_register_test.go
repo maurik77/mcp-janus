@@ -34,14 +34,28 @@ func TestRegisterHandler(t *testing.T) {
 				TokenEndpointAuthMethod: "client_secret_basic",
 			},
 			mockResponse: &auth.RegisterResponse{
-				ClientID:     "test_client_id",
-				ClientSecret: "test_client_secret",
+				ClientID:                "test_client_id",
+				ClientSecret:            "test_client_secret",
+				ClientIDIssuedAt:        1234567890,
+				ClientSecretExpiresAt:   0,
+				ClientName:              "Test Client",
+				RedirectURIs:            []string{"https://example.com/callback"},
+				GrantTypes:              []string{"authorization_code"},
+				ResponseTypes:           []string{"code"},
+				TokenEndpointAuthMethod: "client_secret_basic",
 			},
 			mockError:          nil,
-			expectedStatusCode: http.StatusOK,
+			expectedStatusCode: http.StatusCreated,
 			expectedResponse: &auth.RegisterResponse{
-				ClientID:     "test_client_id",
-				ClientSecret: "test_client_secret",
+				ClientID:                "test_client_id",
+				ClientSecret:            "test_client_secret",
+				ClientIDIssuedAt:        1234567890,
+				ClientSecretExpiresAt:   0,
+				ClientName:              "Test Client",
+				RedirectURIs:            []string{"https://example.com/callback"},
+				GrantTypes:              []string{"authorization_code"},
+				ResponseTypes:           []string{"code"},
+				TokenEndpointAuthMethod: "client_secret_basic",
 			},
 		},
 		{
@@ -81,7 +95,7 @@ func TestRegisterHandler(t *testing.T) {
 			config := &config.Config{}
 
 			// Create gin engine
-			engine, err := NewGinEngine(config, mockAuth, mockMetadata, mockProxy, mockEncryption)
+			engine, err := NewGinEngine(config, mockAuth, mockMetadata, mockProxy, mockEncryption, createTestMetrics())
 			assert.NoError(t, err)
 
 			// Create request body
@@ -100,6 +114,8 @@ func TestRegisterHandler(t *testing.T) {
 
 			if tt.expectedResponse != nil {
 				assert.Equal(t, "application/json; charset=utf-8", resp.Header().Get("Content-Type"))
+				assert.Equal(t, "no-store", resp.Header().Get("Cache-Control"))
+				assert.Equal(t, "no-cache", resp.Header().Get("Pragma"))
 
 				var responseBody auth.RegisterResponse
 				err = json.Unmarshal(resp.Body.Bytes(), &responseBody)
@@ -132,7 +148,7 @@ func TestRegisterHandlerInvalidJSON(t *testing.T) {
 	config := &config.Config{}
 
 	// Create gin engine
-	engine, err := NewGinEngine(config, mockAuth, mockMetadata, mockProxy, mockEncryption)
+	engine, err := NewGinEngine(config, mockAuth, mockMetadata, mockProxy, mockEncryption, createTestMetrics())
 	assert.NoError(t, err)
 
 	// Create test request with invalid JSON

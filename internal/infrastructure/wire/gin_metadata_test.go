@@ -55,7 +55,7 @@ func TestOpenIDConfigurationEndpoint(t *testing.T) {
 			config := &config.Config{}
 
 			// Create gin engine
-			engine, err := NewGinEngine(config, mockAuth, mockMetadata, mockProxy, mockEncryption)
+			engine, err := NewGinEngine(config, mockAuth, mockMetadata, mockProxy, mockEncryption, createTestMetrics())
 			assert.NoError(t, err)
 
 			// Create test request
@@ -91,8 +91,9 @@ func TestProtectedResourceMetadataEndpoint(t *testing.T) {
 		{
 			name: "successful protected resource metadata",
 			mockResponse: map[string]any{
-				"resource":              "https://example.com/api",
-				"authorization_servers": []any{"https://example.com"},
+				"resource":                 "https://example.com/api",
+				"authorization_servers":    []any{"https://example.com"},
+				"bearer_methods_supported": []any{"header"},
 			},
 			expectedStatusCode: http.StatusOK,
 		},
@@ -123,7 +124,7 @@ func TestProtectedResourceMetadataEndpoint(t *testing.T) {
 			config := &config.Config{}
 
 			// Create gin engine
-			engine, err := NewGinEngine(config, mockAuth, mockMetadata, mockProxy, mockEncryption)
+			engine, err := NewGinEngine(config, mockAuth, mockMetadata, mockProxy, mockEncryption, createTestMetrics())
 			assert.NoError(t, err)
 
 			// Create test request
@@ -148,6 +149,69 @@ func TestProtectedResourceMetadataEndpoint(t *testing.T) {
 	}
 }
 
+func TestAuthorizationServerMetadataEndpoint(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tests := []struct {
+		name               string
+		mockResponse       map[string]any
+		expectedStatusCode int
+	}{
+		{
+			name: "successful authorization server metadata",
+			mockResponse: map[string]any{
+				"issuer":                 "https://example.com",
+				"authorization_endpoint": "https://example.com/auth",
+				"token_endpoint":         "https://example.com/token",
+				"registration_endpoint":  "https://example.com/register",
+			},
+			expectedStatusCode: http.StatusOK,
+		},
+		{
+			name:               "empty metadata",
+			mockResponse:       map[string]any{},
+			expectedStatusCode: http.StatusOK,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockMetadata := new(MockMetadataService)
+			mockAuth := new(MockAuthService)
+			mockProxy := new(MockProxy)
+			mockEncryption := new(MockEncryption)
+
+			mockMetadata.On("AuthorizationServerMetadata").Return(tt.mockResponse)
+
+			mockProxy.On("AuthMiddleware").Return(func(next http.Handler) http.Handler {
+				return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					next.ServeHTTP(w, r)
+				})
+			})
+
+			config := &config.Config{}
+
+			engine, err := NewGinEngine(config, mockAuth, mockMetadata, mockProxy, mockEncryption, createTestMetrics())
+			assert.NoError(t, err)
+
+			req, _ := http.NewRequest("GET", "/.well-known/oauth-authorization-server", nil)
+			resp := httptest.NewRecorder()
+
+			engine.ServeHTTP(resp, req)
+
+			assert.Equal(t, tt.expectedStatusCode, resp.Code)
+			assert.Equal(t, "application/json; charset=utf-8", resp.Header().Get("Content-Type"))
+
+			var responseBody map[string]any
+			err = json.Unmarshal(resp.Body.Bytes(), &responseBody)
+			assert.NoError(t, err)
+			assert.Equal(t, tt.mockResponse, responseBody)
+
+			mockMetadata.AssertExpectations(t)
+		})
+	}
+}
+
 func TestHealthEndpoint(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -167,7 +231,7 @@ func TestHealthEndpoint(t *testing.T) {
 	config := &config.Config{}
 
 	// Create gin engine
-	engine, err := NewGinEngine(config, mockAuth, mockMetadata, mockProxy, mockEncryption)
+	engine, err := NewGinEngine(config, mockAuth, mockMetadata, mockProxy, mockEncryption, createTestMetrics())
 	assert.NoError(t, err)
 
 	// Create test request

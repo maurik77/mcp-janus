@@ -24,12 +24,18 @@ type JWK struct {
 	publicKey *rsa.PublicKey
 }
 
-func fetchJWKS(url string) (*JWKS, error) {
-	resp, err := http.Get(url)
+func fetchJWKS(url string, skipTLSVerify bool) (*JWKS, error) {
+	client := newHTTPClient(skipTLSVerify)
+
+	resp, err := client.Get(url)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch JWKS: %w", err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("failed to fetch JWKS: HTTP %d from %s", resp.StatusCode, url)
+	}
 
 	var jwks JWKS
 	if err := json.NewDecoder(resp.Body).Decode(&jwks); err != nil {
@@ -73,9 +79,9 @@ func (j *JWK) RSAKey() (*rsa.PublicKey, error) {
 }
 
 func (jwks *JWKS) GetKeyByID(kid string) (*JWK, error) {
-	for _, key := range jwks.Keys {
-		if key.Kid == kid {
-			return &key, nil
+	for i := range jwks.Keys {
+		if jwks.Keys[i].Kid == kid {
+			return &jwks.Keys[i], nil
 		}
 	}
 	return nil, fmt.Errorf("key not found")

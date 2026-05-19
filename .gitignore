@@ -1,5 +1,7 @@
 # Binaries
 bin/
+/proxy
+/mcpserver
 *.exe
 *.exe~
 *.dll
@@ -72,7 +74,15 @@ ehthumbs.db
 Desktop.ini
 $RECYCLE.BIN/
 
+# Task checksums
+.task/checksum/
+
+# Helm rendered output
+.helm/test.yaml
+
 # Backup files
 *.bak
 *.backup
 *.exe*
+CLAUDE.md
+deployment/

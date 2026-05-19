@@ -13,12 +13,18 @@ type OpenIDConfiguration struct {
 	JWKSEndpoint          string `json:"jwks_uri"`
 }
 
-func fetchOpenIDConfiguration(url string) (*OpenIDConfiguration, error) {
-	resp, err := http.Get(url)
+func fetchOpenIDConfiguration(url string, skipTLSVerify bool) (*OpenIDConfiguration, error) {
+	client := newHTTPClient(skipTLSVerify)
+
+	resp, err := client.Get(url)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch OpenID configuration: %w", err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("failed to fetch OpenID configuration: HTTP %d from %s", resp.StatusCode, url)
+	}
 
 	var config OpenIDConfiguration
 	if err := json.NewDecoder(resp.Body).Decode(&config); err != nil {
