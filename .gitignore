@@ -26,6 +26,7 @@ vendor/
 .env.local
 .env.*.local
 .env.keycloak-dev
+.env.keycloak-dev.ps1
 
 # Key store files (contain encryption keys)
 keys.json
