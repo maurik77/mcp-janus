@@ -13,6 +13,6 @@ type Service interface {
 	AuthenticateRequest(ctx context.Context, req *AuthenticateRequest) (string, error)
 	ManageAuthorizationCode(ctx context.Context, req *AuthorizationCodeData) (*AuthorizationCodeData, *url.URL, error)
 	RetrieveAccessToken(ctx context.Context, req *AccessTokenRequest) (*oauth2.Token, error)
-	RefreshToken(ctx context.Context, refreshToken string) (*oauth2.Token, error)
+	RefreshToken(ctx context.Context, req *RefreshTokenRequest) (*oauth2.Token, error)
 	ValidateJWT(ctx context.Context, tokenString string) (*jwt.Token, error)
 }

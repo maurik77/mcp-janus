@@ -22,50 +22,49 @@ func New(cfg config.Config) (Service, error) {
 	}, nil
 }
 
-// OpenIDConfigurationHandler serves /.well-known/openid-configuration (RFC 8414)
+// OpenIDConfiguration serves /.well-known/openid-configuration
 func (h *MetadataHandler) OpenIDConfiguration() any {
 	return map[string]any{
-		"issuer":                                        h.issuer,
-		"authorization_endpoint":                        h.config.Proxy.BaseURL + "/auth",
-		"token_endpoint":                                h.config.Proxy.BaseURL + "/token",
-		"registration_endpoint":                         h.config.Proxy.BaseURL + "/register",
-		"response_types_supported":                      []string{"code"},
-		"grant_types_supported":                         []string{"authorization_code", "refresh_token"},
-		"code_challenge_methods_supported":              []string{"S256"},
-		"scopes_supported":                              []string{"openid", "mcp"},
-		"token_endpoint_auth_methods_supported":         []string{"none", "private_key_jwt"},
-		"token_endpoint_auth_signing_alg_values_supported": []string{"RS256"},
-		"client_id_metadata_document_supported":         true,
-		"authorization_response_iss_parameter_supported": true,
+		"issuer":                 h.issuer,
+		"authorization_endpoint": h.config.Proxy.BaseURL + "/auth",
+		"token_endpoint":         h.config.Proxy.BaseURL + "/token",
+		"registration_endpoint":  h.config.Proxy.BaseURL + "/register",
+		"response_types_supported":                          []string{"code"},
+		"grant_types_supported":                             []string{"authorization_code", "refresh_token"},
+		"code_challenge_methods_supported":                  []string{"S256"},
+		"scopes_supported":                                  []string{"openid", "mcp"},
+		"token_endpoint_auth_methods_supported":             []string{"none", "private_key_jwt"},
+		"token_endpoint_auth_signing_alg_values_supported":  []string{"RS256"},
+		"client_id_metadata_document_supported":             true,
+		"authorization_response_iss_parameter_supported":    true,
 	}
 }
 
 // AuthorizationServerMetadata serves /.well-known/oauth-authorization-server (RFC 8414)
 func (h *MetadataHandler) AuthorizationServerMetadata() any {
 	return map[string]any{
-		"issuer":                                        h.issuer,
-		"authorization_endpoint":                        h.config.Proxy.BaseURL + "/auth",
-		"token_endpoint":                                h.config.Proxy.BaseURL + "/token",
-		"registration_endpoint":                         h.config.Proxy.BaseURL + "/register",
-		"response_types_supported":                      []string{"code"},
-		"grant_types_supported":                         []string{"authorization_code", "refresh_token"},
-		"code_challenge_methods_supported":              []string{"S256"},
-		"scopes_supported":                              []string{"mcp"},
-		"token_endpoint_auth_methods_supported":         []string{"none", "private_key_jwt"},
-		"token_endpoint_auth_signing_alg_values_supported": []string{"RS256"},
-		"client_id_metadata_document_supported":         true,
-		"authorization_response_iss_parameter_supported": true,
+		"issuer":                 h.issuer,
+		"authorization_endpoint": h.config.Proxy.BaseURL + "/auth",
+		"token_endpoint":         h.config.Proxy.BaseURL + "/token",
+		"registration_endpoint":  h.config.Proxy.BaseURL + "/register",
+		"response_types_supported":                          []string{"code"},
+		"grant_types_supported":                             []string{"authorization_code", "refresh_token"},
+		"code_challenge_methods_supported":                  []string{"S256"},
+		"scopes_supported":                                  []string{"mcp"},
+		"token_endpoint_auth_methods_supported":             []string{"none", "private_key_jwt"},
+		"token_endpoint_auth_signing_alg_values_supported":  []string{"RS256"},
+		"client_id_metadata_document_supported":             true,
+		"authorization_response_iss_parameter_supported":    true,
 	}
 }
 
-// ProtectedResourceMetadataHandler serves /.well-known/oauth-protected-resource (RFC 9728)
+// ProtectedResourceMetadata serves /.well-known/oauth-protected-resource (RFC 9728)
 func (h *MetadataHandler) ProtectedResourceMetadata() any {
-	data := map[string]any{
-		"authorization_servers": []string{h.issuer},
-		"resource":              h.config.Proxy.BaseURL,
+	return map[string]any{
+		"authorization_servers":    []string{h.issuer},
+		"resource":                 h.config.Proxy.BaseURL + "/mcp",
+		"bearer_methods_supported": []string{"header"},
 	}
-
-	return data
 }
 
 // WWWAuthenticateHeader returns the 401 header value

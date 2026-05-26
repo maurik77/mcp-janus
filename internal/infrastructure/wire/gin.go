@@ -13,6 +13,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 )
@@ -23,6 +24,12 @@ const (
 	metricsKey contextKey = iota
 )
 
+const defaultRequestTimeout = 30 * time.Second
+
+// NewGinEngine wires the Gin router with all middleware (CORS, OpenTelemetry,
+// request timeout, metrics) and registers every endpoint: discovery, dynamic
+// client registration, OAuth authorization flow, token exchange, and the
+// authenticated MCP proxy group.
 func NewGinEngine(config *config.Config,
 	authService auth.Service,
 	metadataService metadata.Service,
@@ -41,9 +48,21 @@ func NewGinEngine(config *config.Config,
 	// OpenTelemetry middleware
 	r.Use(otelgin.Middleware("mcp-proxy"))
 
+	// CORS middleware — must run before auth so OPTIONS preflights are answered without a bearer token
+	if config.Proxy.CORS.Enabled {
+		r.Use(cors.New(cors.Config{
+			AllowOrigins:     config.Proxy.CORS.AllowedOrigins,
+			AllowMethods:     config.Proxy.CORS.AllowedMethods,
+			AllowHeaders:     config.Proxy.CORS.AllowedHeaders,
+			ExposeHeaders:    config.Proxy.CORS.ExposedHeaders,
+			AllowCredentials: config.Proxy.CORS.AllowCredentials,
+			MaxAge:           config.Proxy.CORS.MaxAge,
+		}))
+	}
+
 	// Custom timeout middleware
 	r.Use(func(c *gin.Context) {
-		ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
+		ctx, cancel := context.WithTimeout(c.Request.Context(), defaultRequestTimeout)
 		defer cancel()
 		c.Request = c.Request.WithContext(ctx)
 		c.Next()
@@ -194,16 +213,18 @@ func tokenHandler(authHandler auth.Service) gin.HandlerFunc {
 
 // refreshHandler: client → Proxy
 func refreshHandler(authHandler auth.Service) gin.HandlerFunc {
-	type refreshRequest struct {
-		RefreshToken string `json:"refresh_token" form:"refresh_token"`
-	}
-
 	return func(c *gin.Context) {
 		metrics := c.Request.Context().Value(metricsKey).(*telemetry.Metrics)
-		req := &refreshRequest{}
+		req := &auth.RefreshTokenRequest{}
 		if err := c.Bind(req); err != nil {
 			utility.Logger.Warn().Err(err).Msg("refresh: failed to bind request")
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request"})
+			return
+		}
+
+		if req.GrantType != "" && req.GrantType != "refresh_token" {
+			utility.Logger.Warn().Str("grant_type", req.GrantType).Msg("refresh: unsupported grant_type")
+			c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported_grant_type"})
 			return
 		}
 
@@ -213,10 +234,10 @@ func refreshHandler(authHandler auth.Service) gin.HandlerFunc {
 			return
 		}
 
-		utility.Logger.Info().Msg("refresh: token refresh requested")
+		utility.Logger.Info().Str("client_id", req.ClientID).Msg("refresh: token refresh requested")
 
 		start := time.Now()
-		opaqueToken, err := authHandler.RefreshToken(c.Request.Context(), req.RefreshToken)
+		opaqueToken, err := authHandler.RefreshToken(c.Request.Context(), req)
 		duration := time.Since(start)
 
 		if err != nil {
@@ -256,6 +277,8 @@ func registerHandler(authHandler auth.Service) gin.HandlerFunc {
 
 		utility.Logger.Info().Str("client_id", res.ClientID).Msg("register: client registered successfully")
 		metrics.RecordClientRegistration(c.Request.Context(), true)
+		c.Header("Cache-Control", "no-store")
+		c.Header("Pragma", "no-cache")
 		c.JSON(http.StatusCreated, res)
 	}
 }

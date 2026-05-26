@@ -30,21 +30,42 @@ type IDP struct {
 	FetchRetryDelay        time.Duration     `mapstructure:"fetch_retry_delay"`
 }
 
+type CORS struct {
+	Enabled          bool          `mapstructure:"enabled"`
+	AllowedOrigins   []string      `mapstructure:"allowed_origins"`
+	AllowedMethods   []string      `mapstructure:"allowed_methods"`
+	AllowedHeaders   []string      `mapstructure:"allowed_headers"`
+	ExposedHeaders   []string      `mapstructure:"exposed_headers"`
+	AllowCredentials bool          `mapstructure:"allow_credentials"`
+	MaxAge           time.Duration `mapstructure:"max_age"`
+}
+
+type TokenBehavior string
+
+const (
+	TokenBehaviorProxy      TokenBehavior = "proxy"
+	TokenBehaviorSelfIssued TokenBehavior = "self_issued"
+)
+
 type Proxy struct {
-	Issuer      string `mapstructure:"issuer"`
-	BaseURL     string `mapstructure:"base_url"`
-	ListenAddr  string `mapstructure:"listen_addr"`
-	ProbeAddr   string `mapstructure:"probe_addr"`
-	TLS         bool   `mapstructure:"tls"`
-	TLSCertFile string `mapstructure:"tls_cert_file"`
-	TLSKeyFile  string `mapstructure:"tls_key_file"`
-	LogLevel    string `mapstructure:"log_level"`
-	LogFormat   string `mapstructure:"log_format"`
+	Issuer      string        `mapstructure:"issuer"`
+	BaseURL     string        `mapstructure:"base_url"`
+	ListenAddr  string        `mapstructure:"listen_addr"`
+	ProbeAddr   string        `mapstructure:"probe_addr"`
+	TLS         bool          `mapstructure:"tls"`
+	TLSCertFile string        `mapstructure:"tls_cert_file"`
+	TLSKeyFile  string        `mapstructure:"tls_key_file"`
+	LogLevel    string        `mapstructure:"log_level"`
+	LogFormat   string        `mapstructure:"log_format"`
+	CORS        CORS          `mapstructure:"cors"`
+	TokenBehavior TokenBehavior `mapstructure:"token_behavior"`
+	TokenTTL      time.Duration `mapstructure:"token_ttl"`
+	TokenMaxTTL   time.Duration `mapstructure:"token_max_ttl"`
 
 	// CIMD (OAuth Client ID Metadata Document) settings.
-	CIMDEnabled                 bool     `mapstructure:"cimd_enabled"`
-	CIMDAllowList               []string `mapstructure:"cimd_allow_list"`
-	CIMDLocalhostPortInsensitive bool    `mapstructure:"cimd_localhost_port_insensitive"`
+	CIMDEnabled                  bool     `mapstructure:"cimd_enabled"`
+	CIMDAllowList                []string `mapstructure:"cimd_allow_list"`
+	CIMDLocalhostPortInsensitive bool     `mapstructure:"cimd_localhost_port_insensitive"`
 }
 
 type Telemetry struct {
@@ -96,54 +117,38 @@ func Load() (*Config, error) {
 
 	viper.AutomaticEnv()
 	viper.SetEnvPrefix("MCP")
-	err := viper.BindEnv("proxy.base_url", "MCP_PROXY_BASE_URL")
-	if err != nil {
-		return nil, err
+
+	bindings := []struct{ key, env string }{
+		{"proxy.base_url", "MCP_PROXY_BASE_URL"},
+		{"idp.client_secret", "MCP_IDP_CLIENT_SECRET"},
+		{"proxy.listen_addr", "MCP_LISTEN_ADDR"},
+		{"proxy.probe_addr", "MCP_PROBE_ADDR"},
+		{"proxy.tls", "MCP_TLS"},
+		{"proxy.tls_cert_file", "MCP_TLS_CERT_FILE"},
+		{"proxy.tls_key_file", "MCP_TLS_KEY_FILE"},
+		{"telemetry.enabled", "MCP_TELEMETRY_ENABLED"},
+		{"telemetry.otlp_endpoint", "MCP_TELEMETRY_OTLP_ENDPOINT"},
+		{"encryption.master_key", "MCP_ENCRYPTION_MASTER_KEY"},
+		{"idp.skip_tls_verify", "MCP_IDP_SKIP_TLS_VERIFY"},
+		{"proxy.cors.enabled", "MCP_PROXY_CORS_ENABLED"},
+		{"proxy.token_behavior", "MCP_TOKEN_BEHAVIOR"},
+		{"proxy.token_ttl", "MCP_TOKEN_TTL"},
+		{"proxy.token_max_ttl", "MCP_TOKEN_MAX_TTL"},
+		{"proxy.cimd_enabled", "MCP_PROXY_CIMD_ENABLED"},
+		{"proxy.cimd_localhost_port_insensitive", "MCP_PROXY_CIMD_LOCALHOST_PORT_INSENSITIVE"},
 	}
-	err = viper.BindEnv("idp.client_secret", "MCP_IDP_CLIENT_SECRET")
-	if err != nil {
-		return nil, err
+	for _, b := range bindings {
+		if err := viper.BindEnv(b.key, b.env); err != nil {
+			return nil, err
+		}
 	}
-	err = viper.BindEnv("proxy.listen_addr", "MCP_LISTEN_ADDR")
-	if err != nil {
-		return nil, err
-	}
-	err = viper.BindEnv("proxy.probe_addr", "MCP_PROBE_ADDR")
-	if err != nil {
-		return nil, err
-	}
-	err = viper.BindEnv("proxy.tls", "MCP_TLS")
-	if err != nil {
-		return nil, err
-	}
-	err = viper.BindEnv("proxy.tls_cert_file", "MCP_TLS_CERT_FILE")
-	if err != nil {
-		return nil, err
-	}
-	err = viper.BindEnv("proxy.tls_key_file", "MCP_TLS_KEY_FILE")
-	if err != nil {
-		return nil, err
-	}
-	err = viper.BindEnv("telemetry.enabled", "MCP_TELEMETRY_ENABLED")
-	if err != nil {
-		return nil, err
-	}
-	err = viper.BindEnv("telemetry.otlp_endpoint", "MCP_TELEMETRY_OTLP_ENDPOINT")
-	if err != nil {
-		return nil, err
-	}
-	err = viper.BindEnv("encryption.master_key", "MCP_ENCRYPTION_MASTER_KEY")
-	if err != nil {
-		return nil, err
-	}
-	err = viper.BindEnv("idp.skip_tls_verify", "MCP_IDP_SKIP_TLS_VERIFY")
-	if err != nil {
-		return nil, err
-	}
+
 	if err := viper.ReadInConfig(); err != nil {
 		return nil, err
 	}
 
+	// Defaults — must be set after ReadInConfig so they don't override file values,
+	// but Viper applies defaults only when the key is absent, so order is fine.
 	viper.SetDefault("telemetry.otlp_endpoint", "localhost:4317")
 	viper.SetDefault("telemetry.service_name", "mcp-proxy")
 	viper.SetDefault("telemetry.service_version", "1.0.0")
@@ -152,24 +157,27 @@ func Load() (*Config, error) {
 	viper.SetDefault("proxy.probe_addr", ":2113")
 	viper.SetDefault("proxy.log_level", "error")
 	viper.SetDefault("proxy.log_format", "json")
-	viper.SetDefault("idp.skip_tls_verify", false)
 
+	viper.SetDefault("proxy.cors.enabled", false)
+	viper.SetDefault("proxy.cors.allowed_methods",
+		[]string{"GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"})
+	viper.SetDefault("proxy.cors.allowed_headers",
+		[]string{"Authorization", "Content-Type", "Accept",
+			"Mcp-Session-Id", "Mcp-Protocol-Version", "x-custom-auth-headers"})
+	viper.SetDefault("proxy.cors.exposed_headers",
+		[]string{"WWW-Authenticate", "Mcp-Session-Id"})
+	viper.SetDefault("proxy.cors.max_age", 12*time.Hour)
+
+	viper.SetDefault("proxy.token_behavior", TokenBehaviorProxy)
+	viper.SetDefault("proxy.token_ttl", 24*time.Hour)
+	viper.SetDefault("proxy.token_max_ttl", 7*24*time.Hour)
+
+	viper.SetDefault("idp.skip_tls_verify", false)
 	viper.SetDefault("idp.fetch_retry_attempts", 3)
 	viper.SetDefault("idp.fetch_retry_delay", "2s")
 
 	viper.SetDefault("proxy.cimd_enabled", true)
 	viper.SetDefault("proxy.cimd_localhost_port_insensitive", false)
-
-	if err := viper.BindEnv("proxy.cimd_enabled", "MCP_PROXY_CIMD_ENABLED"); err != nil {
-		return nil, err
-	}
-	if err := viper.BindEnv("proxy.cimd_localhost_port_insensitive", "MCP_PROXY_CIMD_LOCALHOST_PORT_INSENSITIVE"); err != nil {
-		return nil, err
-	}
-
-	if err := viper.ReadInConfig(); err != nil {
-		return nil, err
-	}
 
 	var cfg Config
 	if err := viper.Unmarshal(&cfg); err != nil {

@@ -82,8 +82,8 @@ func (m *MockAuthService) RetrieveAccessToken(ctx context.Context, req *auth.Acc
 	return args.Get(0).(*oauth2.Token), args.Error(1)
 }
 
-func (m *MockAuthService) RefreshToken(ctx context.Context, refreshToken string) (*oauth2.Token, error) {
-	args := m.Called(refreshToken)
+func (m *MockAuthService) RefreshToken(ctx context.Context, req *auth.RefreshTokenRequest) (*oauth2.Token, error) {
+	args := m.Called(req)
 	return args.Get(0).(*oauth2.Token), args.Error(1)
 }
 

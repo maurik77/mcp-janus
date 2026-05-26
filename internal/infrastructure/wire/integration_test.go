@@ -9,9 +9,9 @@ import (
 	"math/big"
 	"mcpproxy/internal/infrastructure/config"
 	"mcpproxy/internal/infrastructure/telemetry"
+	"mcpproxy/internal/server"
 	"mcpproxy/internal/service/auth"
 	"mcpproxy/internal/service/metadata"
-	"mcpproxy/internal/server"
 	"mcpproxy/internal/utility"
 	"net/http"
 	"net/http/httptest"
@@ -85,7 +85,7 @@ func TestIntegration_HealthEndpoint(t *testing.T) {
 			"issuer":                 idpServer.URL,
 			"authorization_endpoint": idpServer.URL + "/authorize",
 			"token_endpoint":         idpServer.URL + "/token",
-			"jwks_uri":              idpServer.URL + "/jwks",
+			"jwks_uri":               idpServer.URL + "/jwks",
 		})
 	})
 	idpMux.HandleFunc("/jwks", func(w http.ResponseWriter, r *http.Request) {
@@ -165,7 +165,7 @@ func TestIntegration_DiscoveryEndpoints(t *testing.T) {
 			"issuer":                 idpServer.URL,
 			"authorization_endpoint": idpServer.URL + "/authorize",
 			"token_endpoint":         idpServer.URL + "/token",
-			"jwks_uri":              idpServer.URL + "/jwks",
+			"jwks_uri":               idpServer.URL + "/jwks",
 		})
 	})
 	idpMux.HandleFunc("/jwks", func(w http.ResponseWriter, r *http.Request) {
@@ -237,7 +237,8 @@ func TestIntegration_DiscoveryEndpoints(t *testing.T) {
 
 		var body map[string]any
 		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-		assert.Equal(t, "http://localhost:8080", body["resource"])
+		assert.Equal(t, "http://localhost:8080/mcp", body["resource"])
+		assert.Equal(t, []any{"header"}, body["bearer_methods_supported"])
 	})
 }
 
@@ -255,7 +256,7 @@ func TestIntegration_RegisterAndAuth(t *testing.T) {
 			"issuer":                 idpServer.URL,
 			"authorization_endpoint": idpServer.URL + "/authorize",
 			"token_endpoint":         idpServer.URL + "/token",
-			"jwks_uri":              idpServer.URL + "/jwks",
+			"jwks_uri":               idpServer.URL + "/jwks",
 		})
 	})
 	idpMux.HandleFunc("/jwks", func(w http.ResponseWriter, r *http.Request) {
@@ -352,7 +353,7 @@ func TestIntegration_ProxyUnauthorized(t *testing.T) {
 		IDP: config.IDP{
 			ClientID: "test-client", ClientSecret: "test-secret",
 			OpenIDConfigurationURL: idpServer.URL + "/.well-known/openid-configuration",
-			Scopes: []string{"openid"}, ClaimsMapping: map[string]string{"sub": "X-Sub"},
+			Scopes:                 []string{"openid"}, ClaimsMapping: map[string]string{"sub": "X-Sub"},
 		},
 		Encryption: struct {
 			MasterKey string `mapstructure:"master_key"`
@@ -424,7 +425,7 @@ func TestIntegration_ProxyWithValidToken(t *testing.T) {
 		IDP: config.IDP{
 			ClientID: "test-client", ClientSecret: "test-secret",
 			OpenIDConfigurationURL: idpServer.URL + "/.well-known/openid-configuration",
-			Scopes: []string{"openid"}, ClaimsMapping: map[string]string{"sub": "X-Sub", "email": "X-Email"},
+			Scopes:                 []string{"openid"}, ClaimsMapping: map[string]string{"sub": "X-Sub", "email": "X-Email"},
 		},
 		Encryption: struct {
 			MasterKey string `mapstructure:"master_key"`
@@ -518,7 +519,7 @@ func TestIntegration_TokenExchangeFlow(t *testing.T) {
 		IDP: config.IDP{
 			ClientID: "test-client", ClientSecret: "test-secret",
 			OpenIDConfigurationURL: idpServer.URL + "/.well-known/openid-configuration",
-			Scopes: []string{"openid"}, ClaimsMapping: map[string]string{"sub": "X-Sub"},
+			Scopes:                 []string{"openid"}, ClaimsMapping: map[string]string{"sub": "X-Sub"},
 		},
 		Encryption: struct {
 			MasterKey string `mapstructure:"master_key"`

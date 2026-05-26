@@ -1,47 +1,34 @@
 # MCP Janus
 
-Un proxy MCP conforme a OAuth 2.1 che cripta i token IdP in bearer opachi AES-256-GCM. Singolo binario Go, zero token passthrough.
+<p align="center">
+  <img src="logo.svg" alt="MCP Janus" width="200" height="200"/>
+</p>
 
-## Perché Janus?
+[![Go](https://img.shields.io/badge/Go-1.24+-00ADD8?logo=go&logoColor=white)](https://golang.org)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![MCP Spec](https://img.shields.io/badge/MCP%20spec-2025--06--18-blueviolet)](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization)
+[![OAuth](https://img.shields.io/badge/OAuth-2.1%20%2B%20PKCE-orange)](https://datatracker.ietf.org/doc/html/draft-ietf-oauth-v2-1-13)
+[![RFC 7591](https://img.shields.io/badge/RFC-7591%20DCR-blue)](https://datatracker.ietf.org/doc/html/rfc7591)
 
-La [specifica di autorizzazione MCP](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization) richiede che i proxy **non inoltrino mai token non emessi per loro stessi**. La maggior parte dei proxy MCP auth passa il JWT dell'IdP così com'è, violando questo requisito e rivelando dettagli dell'identity provider ai client.
+**Un proxy OAuth 2.1 che porta la sicurezza enterprise ai server MCP senza toccare una riga del codice del server.**
 
-Janus risolve questo problema crittografando ogni JWT dell'IdP in un **token bearer opaco** tramite AES-256-GCM prima di consegnarlo al client. Il client non vede, decodifica o replica mai il token reale. Ad ogni richiesta il proxy decripta, valida il JWT e inoltra il token reale upstream.
+---
 
-**Risultato**: piena conformità alla specifica MCP, zero perdita di token, e il server upstream riceve un JWT dell'IdP valido senza integrazioni aggiuntive.
+## Il Problema
 
-## Funzionalità Principali
+La maggior parte dei proxy MCP risolve il problema dell'autenticazione nel modo sbagliato: ricevono il JWT reale dall'authorization server e lo consegnano direttamente al client MCP. Il client può ora decodificarlo, leggere ogni claim, riutilizzarlo contro l'IdP e scoprire i dettagli interni dell'identity provider — una violazione diretta della [specifica di autorizzazione MCP](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization), che proibisce esplicitamente l'inoltro di token non emessi per il proxy stesso.
 
-### Sicurezza
+Le conseguenze di sicurezza sono concrete:
 
-- **Token opachi crittografati** -- AES-256-GCM (AEAD) avvolge ogni JWT dell'IdP; i client vedono solo testo cifrato
-- **Nessun token passthrough** -- il proxy emette i propri token, non inoltra mai i token dei client
-- **Validazione JWT** -- validazione completa dei claim (scadenza, audience, issuer) con recupero chiavi JWKS
-- **Mappatura claims-to-headers** -- iniezione configurabile dei claim IdP negli header HTTP upstream
-- **Credenziali client crittografate** -- la registrazione dinamica restituisce `client_id` / `client_secret` crittografati con AEAD
-- **Protezione SSRF per CIMD** -- il fetch del documento CIMD blocca IP privati/loopback e applica una lista di domini consentiti opzionale
-- **Protezione replay JTI** -- le assertion `private_key_jwt` sono monouso; i JTI già utilizzati vengono rifiutati
+- Il client apprende l'URL dell'IdP, il tenant, l'audience e i claim utente
+- Un token rubato è riutilizzabile sia contro il proxy **che** contro l'IdP upstream
+- Non esiste alcun confine tra "token per il proxy" e "token per tutto il resto"
 
-### Conformità agli Standard
+## Cosa Fa Janus
 
-- **OAuth 2.1 + PKCE** -- flusso authorization code con code challenge S256
-- **RFC 7591** -- registrazione dinamica dei client
-- **RFC 9728** -- metadata delle risorse protette per il discovery
-- **OpenID Connect Discovery** -- endpoint `.well-known/openid-configuration`
-- **CIMD** -- OAuth Client ID Metadata Document (`draft-ietf-oauth-client-id-metadata-document-00`); il `client_id` è un URL HTTPS che il proxy recupera a runtime — nessuna pre-registrazione richiesta
-- **RFC 7523 / `private_key_jwt`** -- assertion JWT del client validate tramite `jwks_uri` dal documento CIMD; protezione replay JTI inclusa
-- **RFC 8707** -- resource indicators; i client legano i token a uno specifico server MCP
-- **RFC 9207** -- parametro `iss` aggiunto alla risposta di autorizzazione (protezione da attacchi mix-up)
+Janus si posiziona davanti a qualsiasi server MCP ed esegue il flusso completo OAuth 2.1 + PKCE per conto dei client. Dopo lo scambio del codice di autorizzazione con il vero IdP, **cripta il JWT dell'IdP con AES-256-GCM** e consegna al client un blob opaco. Ad ogni richiesta successiva decripta, valida e inoltra il JWT reale upstream — in modo trasparente.
 
-### Operatività
-
-- **OpenTelemetry** -- tracing distribuito e metriche business (auth, scambio token, proxy, errori upstream)
-- **Docker Compose** -- stack proxy + osservabilità con un solo comando (Jaeger, Prometheus, Grafana)
-- **Logging strutturato** -- log JSON, livello configurabile, nessun segreto nell'output
-- **Shutdown graduale** -- drenaggio pulito delle connessioni su SIGTERM
-- **Singolo binario** -- `go build` produce un unico binario statico, nessuna dipendenza runtime
-
-## Architettura
+**Il client non vede, decodifica o replica mai il token reale. Zero token passthrough. Piena conformità alla specifica MCP.**
 
 ```text
 MCP Client                        MCP Janus Proxy                    Upstream MCP Server
@@ -58,45 +45,94 @@ MCP Client                        MCP Janus Proxy                    Upstream MC
     │                                    │                                    │
     │                                    │◄──────────────────────────────────│
     │◄──────────────────────────────────│                                    │
-    │                                    │                                    │
-
-    Il flusso OAuth 2.1 + PKCE (register → authorize → callback → scambio token)
-    è gestito tra il client e il proxy, in coordinamento con l'IdP.
 ```
+
+## A Chi È Rivolto
+
+- **Platform engineer** che deployano server MCP in produzione e hanno bisogno di sicurezza reale
+- **Team enterprise** che integrano Claude o ChatGPT con strumenti interni protetti da un IdP (Azure AD B2C, Okta, Keycloak, Auth0)
+- **Sviluppatori di server MCP** che vogliono la conformità OAuth 2.1 senza reimplementare l'autenticazione da zero
+- **Team di sicurezza** che verificano le integrazioni AI per perdite di token e conformità alle specifiche
+
+---
+
+## Funzionalità Principali
+
+### Sicurezza
+
+- **Token opachi crittografati** — AES-256-GCM (AEAD) avvolge ogni JWT dell'IdP; i client vedono solo testo cifrato
+- **Nessun token passthrough** — il proxy emette i propri token, non inoltra mai i token dei client
+- **Validazione JWT** — validazione completa dei claim (scadenza, audience, issuer) con JWKS e rotazione automatica delle chiavi
+- **Mappatura claims-to-headers** — iniezione configurabile dei claim IdP negli header HTTP upstream
+- **Credenziali client crittografate** — la registrazione dinamica restituisce `client_id` / `client_secret` crittografati con AEAD
+- **Modalità token self-issued** — Janus può emettere token propri a lunga durata per client MCP come Claude e ChatGPT che non supportano il refresh
+
+### Conformità agli Standard
+
+- **OAuth 2.1 + PKCE** — flusso authorization code con code challenge S256; client pubblici completamente supportati
+- **RFC 7591** — registrazione dinamica dei client con risposta completa §3.2.1
+- **RFC 8414** — Authorization Server Metadata (`/.well-known/oauth-authorization-server`)
+- **RFC 9728** — metadata risorse protette con `bearer_methods_supported: ["header"]`
+- **OpenID Connect Discovery** — `/.well-known/openid-configuration`
+- **RFC 9207** — parametro `iss` nelle risposte di autorizzazione (protezione da AS mix-up)
+
+### Operatività
+
+- **Singolo binario** — `go build` produce un unico binario statico, zero dipendenze runtime
+- **OpenTelemetry** — tracing distribuito e metriche (Jaeger, Prometheus, Grafana pronti all'uso)
+- **Docker Compose** — stack proxy + osservabilità completa con un solo comando
+- **Logging strutturato** — log JSON, livello configurabile
+- **Shutdown graduale** — drenaggio pulito delle connessioni su SIGTERM
+- **Supporto CORS** — opt-in per client MCP browser (es. MCP Inspector)
+
+---
 
 ## Avvio Rapido
 
-### Prerequisiti
-
-- Go 1.24+ (oppure scaricare un [binario di release](https://github.com))
-- Un identity provider OAuth 2.1 / OpenID Connect
-- [Task](https://taskfile.dev/) runner (opzionale, per comandi rapidi)
-
-### Compilazione e avvio
+### Opzione A — Test locale con Keycloak (consigliato per il primo avvio)
 
 ```bash
-git clone https://github.com/user/mcp-janus.git
+git clone https://github.com/maurik77/mcp-janus.git
 cd mcp-janus
 
-# Installa dipendenze
-go mod download
+# Avvia Keycloak + server MCP di test
+docker compose -f docker-compose.keycloak.yaml up -d
 
-# Compila
-go build -o bin/mcpproxy ./cmd/proxy
+# Crea realm, client e utente di test — scrive .env.keycloak-dev
+./scripts/keycloak/setup-keycloak.sh        # Linux/macOS
+# .\scripts\keycloak\setup-keycloak.ps1     # Windows (PowerShell)
 
-# Imposta il client secret dell'IdP (oppure inseriscilo in config.yaml)
-export MCP_IDP_CLIENT_SECRET="your-idp-client-secret"
+# Compila e avvia il proxy
+task build
+cp config.keycloak-dev.yaml config.yaml
+source .env.keycloak-dev && CONFIG_PATH=. ./bin/mcpproxy
 
-# Avvia
-./bin/mcpproxy
+# Esegui il test end-to-end completo (apre il browser per il login)
+./scripts/keycloak/test-proxy-flow.sh
 ```
 
-Oppure usa le scorciatoie Task:
+Consulta [docs/guide_keycloak.md](docs/guide_keycloak.md) per la guida completa al setup Keycloak, incluse le istruzioni Windows (PowerShell).
+
+### Opzione B — Usa il tuo IdP
 
 ```bash
-task install        # go mod download + verify
-task build          # compila → ./bin/mcpproxy
-task run            # compila + avvia (richiede MCP_IDP_CLIENT_SECRET)
+git clone https://github.com/maurik77/mcp-janus.git
+cd mcp-janus
+
+go mod download
+go build -o bin/mcpproxy ./cmd/proxy
+
+# Modifica config.yaml con l'URL OIDC discovery del tuo IdP e le credenziali client
+export MCP_IDP_CLIENT_SECRET="your-idp-client-secret"
+CONFIG_PATH=. ./bin/mcpproxy
+```
+
+Oppure usa le scorciatoie [Task](https://taskfile.dev/):
+
+```bash
+task install   # go mod download + verify
+task build     # compila → ./bin/mcpproxy
+task run       # compila + avvia (richiede MCP_IDP_CLIENT_SECRET)
 ```
 
 ### Verifica che sia in esecuzione
@@ -108,38 +144,47 @@ curl http://localhost:8080/health
 curl http://localhost:8080/.well-known/oauth-protected-resource | jq .
 ```
 
-### Server di test
-
-Il repository include un server MCP meteo fittizio per test locali:
-
-```bash
-task build-testserver   # compila → ./bin/mcpserver
-task run-testserver     # avvia su :8081
-task start-all          # proxy + server di test insieme
-```
-
-Consulta [docs/testing-guide.md](docs/testing-guide.md) per la guida completa ai test end-to-end.
+---
 
 ## Come Funziona
 
-### Flusso dei token opachi
+### Flusso token opachi standard
 
-1. **Registrazione** -- il client chiama `POST /register` con gli URI di redirect (RFC 7591), _oppure_ usa un URL come `client_id` (CIMD — nessuna pre-registrazione necessaria). Il proxy restituisce `client_id` e `client_secret` crittografati con AEAD per i client registrati.
-2. **Autorizzazione** -- il client effettua il redirect a `GET /auth` con il `code_challenge` PKCE e il `resource` opzionale (RFC 8707). Il proxy reindirizza verso l'IdP.
-3. **Callback** -- l'IdP reindirizza a `GET /callback`. Il proxy aggiunge `iss` al redirect (RFC 9207) per protezione da attacchi mix-up.
-4. **Scambio token** -- il client chiama `POST /token` con il `code_verifier`. Per client CIMD con `private_key_jwt`, viene verificata un'assertion JWT firmata tramite `jwks_uri` del client. Il proxy scambia il codice con l'IdP, cripta il JWT reale e restituisce il bearer opaco.
-5. **Richieste autenticate** -- il client invia `Authorization: Bearer <opaque>` a `GET/POST /mcp/*`. Il proxy decripta, valida il JWT, mappa i claims negli header e inoltra con il token reale.
-6. **Refresh** -- il client chiama `POST /refresh` con il refresh token crittografato. Il proxy decripta, effettua il refresh con l'IdP, ri-cripta e restituisce un nuovo bearer opaco.
+1. **Registrazione** — il client chiama `POST /register` con gli URI di redirect. Il proxy restituisce `client_id` e `client_secret` crittografati con AEAD (RFC 7591 §3.2.1).
+2. **Autorizzazione** — il client effettua il redirect a `GET /auth` con il `code_challenge` PKCE. Il proxy reindirizza al vero IdP.
+3. **Callback** — l'IdP reindirizza a `GET /callback`. Il proxy riceve il codice di autorizzazione.
+4. **Scambio token** — il client chiama `POST /token` con il `code_verifier`. Il proxy scambia con l'IdP, riceve il JWT reale, lo cripta con AES-256-GCM e restituisce un bearer opaco al client.
+5. **Richieste autenticate** — il client invia `Authorization: Bearer <opaque>` a `/mcp/*`. Il proxy decripta, valida il JWT, mappa i claim negli header e inoltra con il token reale.
+6. **Refresh** — il client chiama `POST /refresh` con il refresh token crittografato. Il proxy decripta, effettua il refresh con l'IdP, ri-cripta e restituisce un nuovo bearer opaco.
 
-### Dettaglio crittografia dei token
+### Modalità token self-issued (`token_behavior: self_issued`)
 
-- **Algoritmo**: AES-256-GCM (AEAD -- crittografia autenticata con dati associati)
-- **Processo**: JWT reale → crittografia con chiave master a 256 bit → nonce casuale per operazione → codifica base64url → stringa token opaco
-- **Decrittografia**: estrazione bearer → decodifica base64url → decrittografia con chiave master → parsing JWT → validazione claims
+Alcuni client MCP (Claude, ChatGPT) completano il flusso OAuth una sola volta e non chiamano mai `/refresh`. Con la modalità predefinita `proxy`, le sessioni scadono alla scadenza del token dell'IdP (tipicamente 1 ora). La modalità `self_issued` risolve questo problema:
 
-### Mappatura dei claims
+1. Dopo lo scambio iniziale con l'IdP, il JWT viene validato **una sola volta** e i claim vengono estratti.
+2. Janus emette un token opaco proprio con i **claim mappati cifrati** e una scadenza controllata da Janus (`token_ttl`).
+3. Ad ogni richiesta successiva il proxy decripta il token, verifica la scadenza e inietta i claim come header — **nessuna chiamata JWKS, nessun contatto con l'IdP**.
+4. Se `/refresh` viene chiamato, viene emesso un nuovo access token dagli stessi claim cifrati fino al limite `token_max_ttl`.
 
-I claims del JWT dell'IdP vengono mappati ad header HTTP nelle richieste upstream:
+**Trade-off:**
+
+| | `proxy` | `self_issued` |
+|---|---|---|
+| Durata token | Controllata dall'IdP (es. 1 h) | Controllata da Janus (es. 720 h) |
+| Revoca IdP efficace entro | ~1 h | fino a `token_ttl` |
+| Chiamata JWKS per richiesta | sì (con cache) | no |
+| Freschezza dei claim | ad ogni richiesta | congelati al login |
+| Client senza refresh | sessione scade ogni ora | durata intera di `token_ttl` |
+
+### Crittografia dei token
+
+- **Algoritmo**: AES-256-GCM (AEAD — crittografia autenticata con dati associati)
+- **Processo**: JWT reale → crittografia con chiave master a 256 bit → nonce casuale per operazione → codifica base64url → stringa opaca
+- **Decrittografia**: estrazione bearer → decodifica base64url → decrittografia → parsing JWT → validazione claim
+
+### Mappatura dei claim
+
+I claim del JWT dell'IdP vengono mappati ad header HTTP ad ogni richiesta proxied:
 
 ```yaml
 idp:
@@ -150,80 +195,87 @@ idp:
     upn: X-UPN
 ```
 
-Il server upstream riceve questi header senza dover comprendere JWT o comunicare con l'IdP.
+Il server MCP upstream riceve header HTTP puliti — nessun parsing JWT, nessuna dipendenza dall'IdP.
 
-Per la documentazione dettagliata dell'architettura consulta [docs/design.md](docs/design.md) e [docs/auth-flow.md](docs/auth-flow.md).
+---
 
 ## Configurazione
 
-Crea un file `config.yaml` nella directory di lavoro (oppure imposta variabili d'ambiente con prefisso `MCP_`):
+Crea `config.yaml` nella directory di lavoro (oppure usa variabili d'ambiente con prefisso `MCP_`):
 
 ```yaml
 proxy:
-  base_url: http://localhost:8080        # URL canonico di questo proxy
-  issuer: ""                             # Identificatore issuer (default: base_url se vuoto)
-  listen_addr: ":8080"                   # Indirizzo di ascolto
-  log_level: info                        # trace|debug|info|warn|error|fatal|panic
-  log_format: json                       # json
-  # CIMD: supporto OAuth Client ID Metadata Document
-  cimd_enabled: true                     # Accetta client_id in formato URL
-  cimd_allow_list: []                    # Lista domini consentiti; vuota = qualsiasi URL HTTPS accettato
-  cimd_localhost_port_insensitive: false # Confronta URI localhost ignorando la porta (compatibilità Claude Code)
+  base_url: http://localhost:8080
+  listen_addr: ":8080"
+  log_level: info                        # trace|debug|info|warn|error
+  log_format: json
+  cors:
+    enabled: false                       # true per client browser (es. MCP Inspector)
+    allowed_origins:
+      - http://localhost:6274
+  token_behavior: proxy                  # proxy (default) | self_issued
+  token_ttl: 24h                         # [self_issued] durata di ogni access token
+  token_max_ttl: 168h                    # [self_issued] finestra massima dal login originale
 
 idp:
-  client_id: your-idp-client-id         # OAuth client ID presso l'IdP
-  client_secret: ""                      # OAuth client secret (usa env var MCP_IDP_CLIENT_SECRET)
+  client_id: your-idp-client-id
+  client_secret: ""                      # usa env var MCP_IDP_CLIENT_SECRET
   openid_configuration_url: https://auth.example.com/.well-known/openid-configuration
   scopes:
     - openid
     - profile
     - email
-  claims_mapping:                        # Claim JWT dell'IdP → header HTTP upstream
+  claims_mapping:
     sub: X-Sub
     name: X-Full-Name
     email: X-Email
-  jwt_leeway: 10s                        # Tolleranza clock skew per validazione JWT
+  jwt_leeway: 10s
 
 encryption:
-  # Chiave hex a 256 bit. Genera con: openssl rand -hex 32
-  master_key: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  # Genera con: openssl rand -hex 32
+  master_key: "your-64-char-hex-key"
 
 upstream:
-  name: my-mcp-server                   # Nome visualizzato dell'upstream
-  resource: https://mcp.example.com     # Identificatore risorsa per audience binding
-  base_url: https://mcp.example.com     # URL base dell'upstream
-  path_prefix: /mcp                     # Prefisso percorso per richieste proxied
+  name: my-mcp-server
+  resource: https://mcp.example.com
+  base_url: https://mcp.example.com
+  path_prefix: /mcp
 
 telemetry:
-  enabled: true                          # Abilita OpenTelemetry
-  service_name: mcp-proxy                # Nome servizio in trace/metriche
-  service_version: 1.0.0
-  otlp_endpoint: localhost:4318          # Endpoint OTLP HTTP
+  enabled: true
+  service_name: mcp-proxy
+  otlp_endpoint: localhost:4318
 ```
 
-Gli override tramite variabili d'ambiente usano il prefisso `MCP_` con underscore per la nidificazione:
+Override tramite variabili d'ambiente:
 
 ```bash
 export MCP_IDP_CLIENT_SECRET="your-secret"
 export MCP_PROXY_BASE_URL="https://proxy.example.com"
 export MCP_ENCRYPTION_MASTER_KEY="$(openssl rand -hex 32)"
+export MCP_PROXY_CORS_ENABLED=true
+export MCP_TOKEN_BEHAVIOR=self_issued
+export MCP_TOKEN_TTL=720h
 ```
 
-Consulta [.env.example](.env.example) per tutte le variabili supportate.
+Consulta [.env.example](.env.example) per la lista completa.
+
+---
 
 ## Endpoint API
 
 | Metodo | Percorso | Descrizione |
 |--------|----------|-------------|
 | `GET` | `/.well-known/openid-configuration` | Discovery OpenID Connect |
+| `GET` | `/.well-known/oauth-authorization-server` | Metadata authorization server (RFC 8414) |
 | `GET` | `/.well-known/oauth-protected-resource` | Metadata risorsa protetta (RFC 9728) |
 | `POST` | `/register` | Registrazione dinamica client (RFC 7591) |
-| `GET` | `/auth` | Avvio autorizzazione OAuth (con PKCE) |
+| `GET` | `/auth` | Autorizzazione OAuth con PKCE |
 | `GET` | `/callback` | Callback OAuth dall'IdP |
-| `POST` | `/token` | Scambio token (auth code → bearer opaco) |
+| `POST` | `/token` | Authorization code → bearer opaco |
 | `POST` | `/refresh` | Scambio refresh token |
-| `GET/POST` | `/mcp/*` | Proxy MCP autenticato verso upstream |
-| `GET` | `/health` | Health check (restituisce `OK`) |
+| `GET/POST` | `/mcp/*` | Proxy MCP autenticato |
+| `GET` | `/health` | Health check |
 
 ### Esempio: registrare un client
 
@@ -238,71 +290,92 @@ curl -s -X POST http://localhost:8080/register \
   }' | jq .
 ```
 
-Consulta [docs/testing-guide.md](docs/testing-guide.md) per la sequenza completa di curl (register → auth → token → chiamata proxy).
+Consulta [docs/testing-guide.md](docs/testing-guide.md) per la sequenza completa.
+
+---
 
 ## Osservabilità
 
-Avvia lo stack completo di osservabilità:
-
 ```bash
-docker-compose -f docker-compose.observability.yaml up -d
+docker compose -f docker-compose.observability.yaml up -d
 ```
 
-Questo lancia Jaeger (trace), Prometheus (metriche), Grafana (dashboard) e l'OpenTelemetry Collector. Il proxy esporta trace e metriche automaticamente quando `telemetry.enabled: true`.
+Avvia Jaeger (trace), Prometheus (metriche), Grafana (dashboard) e l'OpenTelemetry Collector.
 
 Metriche principali:
 
-- `mcp.proxy.auth.requests.total` -- richieste di autenticazione per risultato
-- `mcp.proxy.token.exchange.duration` -- istogramma latenza scambio token
-- `mcp.proxy.requests.total` -- richieste proxy per metodo/percorso/stato
-- `mcp.proxy.upstream.errors.total` -- contatore errori upstream
+| Metrica | Descrizione |
+|---------|-------------|
+| `mcp.proxy.auth.requests.total` | Richieste di autenticazione per risultato |
+| `mcp.proxy.token.exchange.duration` | Latenza scambio token |
+| `mcp.proxy.requests.total` | Richieste proxy per metodo/percorso/stato |
+| `mcp.proxy.upstream.errors.total` | Contatore errori upstream |
 
-Consulta [docs/opentelemetry.md](docs/opentelemetry.md) per dettagli di configurazione, span personalizzati e setup delle dashboard.
+Consulta [docs/opentelemetry.md](docs/opentelemetry.md) per il setup delle dashboard.
+
+---
 
 ## Docker
 
 ```bash
-# Proxy + server di test
-docker-compose up -d
+# Proxy + server MCP di test
+docker compose up -d
 
-# Stack completo di osservabilità (Jaeger, Prometheus, Grafana, OTel Collector)
-docker-compose -f docker-compose.observability.yaml up -d
+# Stack completo di osservabilità
+docker compose -f docker-compose.observability.yaml up -d
 
 # Entrambi insieme
-docker-compose -f docker-compose.yaml -f docker-compose.observability.yaml up -d
+docker compose -f docker-compose.yaml -f docker-compose.observability.yaml up -d
+
+# Ambiente dev Keycloak
+docker compose -f docker-compose.keycloak.yaml up -d
 ```
+
+---
+
+## Deployment
+
+Lo script `deploy.sh` compila, etichetta, pubblica e deploya via Helm in un unico passaggio:
+
+```bash
+export REGISTRY=myregistry.azurecr.io
+./deploy.sh 1.0.0
+```
+
+Passi eseguiti: `docker build` → tag + push al registry → aggiornamento `deployment/values-dev.yaml` → `helm upgrade`.
+
+---
 
 ## Contribuire
 
 1. Effettua il fork del repository e crea un branch per la funzionalità
 2. Esegui `task fmt` prima del commit
 3. Aggiungi test per le nuove funzionalità (table-driven preferiti)
-4. Assicurati che `task test` passi
-5. Assicurati che `task lint` passi (se golangci-lint è installato)
-6. Apri una pull request con una descrizione chiara
+4. Assicurati che `task test` e `task lint` passino
+5. Apri una pull request con una descrizione chiara
+
+Per testare con un IdP reale, la [guida setup Keycloak](docs/guide_keycloak.md) ti fornisce un IdP locale in meno di 5 minuti.
+
+---
 
 ## Riferimenti
 
 ### Specifiche MCP
-
 - [MCP Authorization (2025-06-18)](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization)
-- [MCP Security Best Practices (2025-06-18)](https://modelcontextprotocol.io/specification/2025-06-18/basic/security_best_practices)
+- [MCP Security Best Practices](https://modelcontextprotocol.io/specification/2025-06-18/basic/security_best_practices)
 
 ### Standard OAuth
-
 - [OAuth 2.1 (IETF Draft)](https://datatracker.ietf.org/doc/html/draft-ietf-oauth-v2-1-13)
 - [RFC 7591: Dynamic Client Registration](https://datatracker.ietf.org/doc/html/rfc7591)
-- [RFC 7523: JWT Bearer Client Assertions (`private_key_jwt`)](https://datatracker.ietf.org/doc/html/rfc7523)
 - [RFC 8414: Authorization Server Metadata](https://datatracker.ietf.org/doc/html/rfc8414)
 - [RFC 8707: Resource Indicators](https://datatracker.ietf.org/doc/html/rfc8707)
-- [RFC 9207: Authorization Server Issuer Identification](https://datatracker.ietf.org/doc/html/rfc9207)
+- [RFC 9207: AS Issuer Identification](https://datatracker.ietf.org/doc/html/rfc9207)
 - [RFC 9728: Protected Resource Metadata](https://datatracker.ietf.org/doc/html/rfc9728)
-- [CIMD: OAuth Client ID Metadata Document](https://datatracker.ietf.org/doc/html/draft-ietf-oauth-client-id-metadata-document)
 
 ### Documentazione del Progetto
-
 - [Architettura e Design](docs/design.md)
 - [Diagrammi del Flusso Auth](docs/auth-flow.md)
+- [Guida Setup Keycloak](docs/guide_keycloak.md)
 - [Guida ai Test](docs/testing-guide.md)
 - [Setup OpenTelemetry](docs/opentelemetry.md)
 - [Note sulla Specifica Auth MCP](docs/mcp-auth-notes.md)
