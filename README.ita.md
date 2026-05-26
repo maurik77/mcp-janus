@@ -1,6 +1,7 @@
 # MCP Janus
 
 [![Go](https://img.shields.io/badge/Go-1.24+-00ADD8?logo=go&logoColor=white)](https://golang.org)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![MCP Spec](https://img.shields.io/badge/MCP%20spec-2025--06--18-blueviolet)](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization)
 [![OAuth](https://img.shields.io/badge/OAuth-2.1%20%2B%20PKCE-orange)](https://datatracker.ietf.org/doc/html/draft-ietf-oauth-v2-1-13)
 [![RFC 7591](https://img.shields.io/badge/RFC-7591%20DCR-blue)](https://datatracker.ietf.org/doc/html/rfc7591)
