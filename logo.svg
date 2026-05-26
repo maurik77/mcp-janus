@@ -1,0 +1,170 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+
+    <!-- ── Coin background: deep navy with off-centre highlight ── -->
+    <radialGradient id="coinBg" cx="42%" cy="38%" r="68%">
+      <stop offset="0%"   stop-color="#1d4278"/>
+      <stop offset="60%"  stop-color="#0e1e3a"/>
+      <stop offset="100%" stop-color="#04090f"/>
+    </radialGradient>
+
+    <!-- ── Edge vignette for depth ── -->
+    <radialGradient id="vignette" cx="50%" cy="50%" r="50%">
+      <stop offset="55%"  stop-color="#000000" stop-opacity="0"/>
+      <stop offset="100%" stop-color="#000000" stop-opacity="0.75"/>
+    </radialGradient>
+
+    <!-- ── Gold: top-left bright, bottom-right dark (coin relief) ── -->
+    <linearGradient id="goldFace" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%"   stop-color="#fce88a"/>
+      <stop offset="35%"  stop-color="#d4a012"/>
+      <stop offset="75%"  stop-color="#a07000"/>
+      <stop offset="100%" stop-color="#7a5000"/>
+    </linearGradient>
+
+    <!-- ── Gold for rings and text ── -->
+    <linearGradient id="goldRing" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%"   stop-color="#f0c835"/>
+      <stop offset="100%" stop-color="#b88c10"/>
+    </linearGradient>
+
+    <!-- ── Soft ambient glow for the gold face silhouette ── -->
+    <filter id="faceGlow" x="-18%" y="-18%" width="136%" height="136%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="7" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <!-- ── Clip glow to inner border so it doesn't bleed outside rings ── -->
+    <clipPath id="innerClip">
+      <circle cx="256" cy="256" r="236"/>
+    </clipPath>
+
+  </defs>
+
+  <!-- ═══════════════════════════════════════
+       BACKGROUND
+       ═══════════════════════════════════════ -->
+  <circle cx="256" cy="256" r="256" fill="#04090f"/>
+  <circle cx="256" cy="256" r="252" fill="url(#coinBg)"/>
+  <circle cx="256" cy="256" r="252" fill="url(#vignette)"/>
+
+  <!-- ═══════════════════════════════════════
+       BORDER RINGS  (double gold ring, classic coin style)
+       ═══════════════════════════════════════ -->
+  <circle cx="256" cy="256" r="250" fill="none" stroke="url(#goldRing)" stroke-width="5"/>
+  <circle cx="256" cy="256" r="241" fill="none" stroke="url(#goldRing)" stroke-width="1.5"/>
+  <!-- Inner decorative dashed ring -->
+  <circle cx="256" cy="256" r="220" fill="none" stroke="#1e3c6a" stroke-width="1.2"
+          stroke-dasharray="3 9"/>
+
+  <!-- Compass-point dots -->
+  <circle cx="256" cy="14"  r="4.5" fill="#c8960c"/>
+  <circle cx="256" cy="498" r="4.5" fill="#c8960c"/>
+  <circle cx="14"  cy="256" r="4.5" fill="#c8960c"/>
+  <circle cx="498" cy="256" r="4.5" fill="#c8960c"/>
+
+  <!-- ═══════════════════════════════════════
+       JANUS FACE SILHOUETTE
+       ═══════════════════════════════════════
+       One closed path: two back-to-back profiles traced clockwise.
+
+       Right face profile (offset from centre x=256):
+         y=180  x=372  (+116)  forehead
+         y=248  x=362  (+106)  eye socket — slightly inward from forehead
+         y=286  x=392  (+136)  nose tip   — the most outward point (bump)
+         y=322  x=374  (+118)  below nose
+         y=356  x=358  (+102)  chin
+         y=388  x=278  ( +22)  jaw — sweeps dramatically back to centre
+
+       Left face is the mirror (x → 512−x), reversed for continuity.
+       ═══════════════════════════════════════ -->
+  <path
+    clip-path="url(#innerClip)"
+    filter="url(#faceGlow)"
+    fill="url(#goldFace)"
+    d="
+      M 256 112
+      C 298 112, 348 142, 372 180
+      C 382 200, 378 225, 362 248
+      C 354 262, 375 270, 392 286
+      C 398 300, 390 312, 374 322
+      C 366 332, 370 345, 358 356
+      C 344 368, 316 380, 278 388
+      L 256 393
+      L 234 388
+      C 196 380, 168 368, 154 356
+      C 142 345, 146 332, 138 322
+      C 122 312, 114 300, 120 286
+      C 137 270, 158 262, 150 248
+      C 134 225, 130 200, 140 180
+      C 164 142, 214 112, 256 112
+      Z
+    "
+  />
+
+  <!-- ═══════════════════════════════════════
+       CENTRE DIVIDING LINE
+       The axis between the two faces — the Janus boundary.
+       ═══════════════════════════════════════ -->
+  <line x1="256" y1="108" x2="256" y2="397"
+        stroke="#04090f" stroke-width="4" stroke-linecap="round"/>
+  <!-- Gold caps at each end of the line -->
+  <circle cx="256" cy="108" r="5"   fill="#c8960c"/>
+  <circle cx="256" cy="397" r="5"   fill="#c8960c"/>
+
+  <!-- ═══════════════════════════════════════
+       LOCK ICON  (security motif, centred on the dividing line)
+       ═══════════════════════════════════════ -->
+  <!-- Body -->
+  <rect x="237" y="245" width="38" height="32" rx="6"
+        fill="#04090f" stroke="#c8960c" stroke-width="2.5"/>
+  <!-- Shackle -->
+  <path d="M 245 245 L 245 232 Q 245 218 256 218 Q 267 218 267 232 L 267 245"
+        fill="none" stroke="#c8960c" stroke-width="2.5"
+        stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- Keyhole — circle -->
+  <circle cx="256" cy="258" r="5.5" fill="#c8960c"/>
+  <!-- Keyhole — slot -->
+  <rect x="253" y="263" width="6" height="9" rx="2" fill="#c8960c"/>
+
+  <!-- ═══════════════════════════════════════
+       DECORATIVE DIVIDERS  (flanking each text block)
+       ═══════════════════════════════════════ -->
+  <!-- Top dividers flanking "MCP" -->
+  <line x1="180" y1="80" x2="234" y2="80" stroke="#c8960c" stroke-width="1.2" opacity="0.7"/>
+  <line x1="278" y1="80" x2="332" y2="80" stroke="#c8960c" stroke-width="1.2" opacity="0.7"/>
+  <!-- Diamond centred between the two lines -->
+  <polygon points="256,74 261,80 256,86 251,80" fill="#c8960c"/>
+
+  <!-- Bottom dividers flanking "JANUS" -->
+  <line x1="156" y1="446" x2="218" y2="446" stroke="#c8960c" stroke-width="1.2" opacity="0.7"/>
+  <line x1="294" y1="446" x2="356" y2="446" stroke="#c8960c" stroke-width="1.2" opacity="0.7"/>
+  <polygon points="256,440 261,446 256,452 251,446" fill="#c8960c"/>
+
+  <!-- ═══════════════════════════════════════
+       TEXT
+       ═══════════════════════════════════════ -->
+  <!-- "MCP" at top — product family label -->
+  <text
+    x="256" y="71"
+    text-anchor="middle"
+    font-family="Georgia, 'Times New Roman', serif"
+    font-size="26"
+    font-weight="bold"
+    fill="#c8960c"
+    letter-spacing="10">MCP</text>
+
+  <!-- "JANUS" at bottom — product name -->
+  <text
+    x="256" y="473"
+    text-anchor="middle"
+    font-family="Georgia, 'Times New Roman', serif"
+    font-size="42"
+    font-weight="bold"
+    fill="#c8960c"
+    letter-spacing="12">JANUS</text>
+
+</svg>
