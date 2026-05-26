@@ -30,7 +30,7 @@ proxy:
   # Enable TLS on the proxy listener. Requires tlsCertFile and tlsKeyFile in config.
   tls: false
   # Enable support for URL-format client_id values (OAuth Client ID Metadata Document).
-  cimdEnabled: true
+  cimdEnabled: false
   # Optional domain allowlist for CIMD client_id URLs. Empty list accepts any HTTPS URL.
   # Example: ["claude.ai", "chatgpt.com"]
   cimdAllowList: []

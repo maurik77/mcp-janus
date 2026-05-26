@@ -176,7 +176,7 @@ func Load() (*Config, error) {
 	viper.SetDefault("idp.fetch_retry_attempts", 3)
 	viper.SetDefault("idp.fetch_retry_delay", "2s")
 
-	viper.SetDefault("proxy.cimd_enabled", true)
+	viper.SetDefault("proxy.cimd_enabled", false)
 	viper.SetDefault("proxy.cimd_localhost_port_insensitive", false)
 
 	var cfg Config

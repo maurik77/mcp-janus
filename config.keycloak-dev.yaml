@@ -12,7 +12,7 @@ proxy:
   listen_addr: ":8080"
   log_level: debug
   log_format: text
-  cimd_enabled: true
+  cimd_enabled: false
   cimd_localhost_port_insensitive: true
 
 idp:
