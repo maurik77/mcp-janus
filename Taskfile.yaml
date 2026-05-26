@@ -183,6 +183,58 @@ tasks:
       - gosec ./...
       - echo "✓ Security check complete"
 
+  # ── Keycloak dev environment ───────────────────────────────────────────────
+
+  keycloak-up:
+    desc: Start Keycloak + MCP test server (docker compose)
+    cmds:
+      - docker compose -f docker-compose.keycloak.yaml up -d
+      - echo "✓ Keycloak starting at http://localhost:8888 (admin/admin)"
+      - echo "  Wait 60 s then run{{":"}} task keycloak-setup"
+
+  keycloak-down:
+    desc: Stop and remove Keycloak containers
+    cmds:
+      - docker compose -f docker-compose.keycloak.yaml down
+      - echo "✓ Keycloak stopped"
+
+  keycloak-setup:
+    desc: Bootstrap Keycloak realm, client and test user
+    cmds:
+      - ./scripts/keycloak/setup-keycloak.sh
+
+  keycloak-verify:
+    desc: Verify Keycloak IdP connectivity (no browser required)
+    cmds:
+      - |
+        if [ ! -f .env.keycloak-dev ]; then
+          echo "Run 'task keycloak-setup' first to generate .env.keycloak-dev"
+          exit 1
+        fi
+        source .env.keycloak-dev && ./scripts/keycloak/verify-idp.sh
+
+  keycloak-test:
+    desc: Run full OAuth 2.1 + PKCE end-to-end test (opens browser)
+    cmds:
+      - |
+        if [ ! -f .env.keycloak-dev ]; then
+          echo "Run 'task keycloak-setup' first to generate .env.keycloak-dev"
+          exit 1
+        fi
+        source .env.keycloak-dev && ./scripts/keycloak/test-proxy-flow.sh
+
+  keycloak-run:
+    desc: Build and run proxy with Keycloak config (reads .env.keycloak-dev)
+    deps: [build]
+    cmds:
+      - |
+        if [ ! -f .env.keycloak-dev ]; then
+          echo "Run 'task keycloak-setup' first"
+          exit 1
+        fi
+        cp config.keycloak-dev.yaml config.yaml
+        source .env.keycloak-dev && CONFIG_PATH=. ./bin/mcpproxy
+
   help:
     desc: Display help message
     cmds:

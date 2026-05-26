@@ -13,7 +13,6 @@ spec:
     metadata:
       labels:
         {{- include "mcp-janus.selectorLabels" . | nindent 8 }}
-        {{- include "mcp-janus.labels" . | nindent 8 }}
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
     spec:

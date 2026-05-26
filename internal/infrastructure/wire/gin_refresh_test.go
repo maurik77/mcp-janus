@@ -137,53 +137,35 @@ func TestRefreshHandler(t *testing.T) {
 func TestRefreshHandlerDifferentMethods(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	// Setup mocks
 	mockMetadata := new(MockMetadataService)
 	mockAuth := new(MockAuthService)
 	mockProxy := new(MockProxy)
 	mockEncryption := new(MockEncryption)
 
-	// Mock the AuthMiddleware - always needed
 	mockProxy.On("AuthMiddleware").Return(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			next.ServeHTTP(w, r)
 		})
 	})
 
-	config := &config.Config{}
-
-	// Create gin engine
-	engine, err := NewGinEngine(config, mockAuth, mockMetadata, mockProxy, mockEncryption, createTestMetrics())
+	cfg := &config.Config{}
+	engine, err := NewGinEngine(cfg, mockAuth, mockMetadata, mockProxy, mockEncryption, createTestMetrics())
 	assert.NoError(t, err)
 
 	tests := []struct {
 		name   string
 		method string
 	}{
-		{
-			name:   "GET method should not be allowed",
-			method: "GET",
-		},
-		{
-			name:   "PUT method should not be allowed",
-			method: "PUT",
-		},
-		{
-			name:   "DELETE method should not be allowed",
-			method: "DELETE",
-		},
+		{name: "GET method should not be allowed", method: "GET"},
+		{name: "PUT method should not be allowed", method: "PUT"},
+		{name: "DELETE method should not be allowed", method: "DELETE"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Create test request with different HTTP methods
 			req, _ := http.NewRequest(tt.method, "/refresh", nil)
 			resp := httptest.NewRecorder()
-
-			// Execute request
 			engine.ServeHTTP(resp, req)
-
-			// Should return 404 or 405 for non-POST methods
 			assert.True(t, resp.Code == http.StatusNotFound || resp.Code == http.StatusMethodNotAllowed)
 		})
 	}

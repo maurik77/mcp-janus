@@ -54,7 +54,7 @@ func TestOpenIDConfiguration_RequiredFields(t *testing.T) {
 	assert.Equal(t, []string{"code"}, result["response_types_supported"])
 	assert.Equal(t, []string{"authorization_code", "refresh_token"}, result["grant_types_supported"])
 	assert.Equal(t, []string{"S256"}, result["code_challenge_methods_supported"])
-	assert.Equal(t, []string{"none"}, result["token_endpoint_auth_methods_supported"])
+	assert.Equal(t, []string{"none", "private_key_jwt"}, result["token_endpoint_auth_methods_supported"])
 }
 
 func TestAuthorizationServerMetadata_RequiredFields(t *testing.T) {
@@ -76,7 +76,7 @@ func TestAuthorizationServerMetadata_RequiredFields(t *testing.T) {
 	assert.Equal(t, []string{"code"}, result["response_types_supported"])
 	assert.Equal(t, []string{"authorization_code", "refresh_token"}, result["grant_types_supported"])
 	assert.Equal(t, []string{"S256"}, result["code_challenge_methods_supported"])
-	assert.Equal(t, []string{"none"}, result["token_endpoint_auth_methods_supported"])
+	assert.Equal(t, []string{"none", "private_key_jwt"}, result["token_endpoint_auth_methods_supported"])
 }
 
 func TestProtectedResourceMetadata_Fields(t *testing.T) {

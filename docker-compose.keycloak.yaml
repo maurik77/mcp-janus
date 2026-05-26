@@ -1,0 +1,51 @@
+version: '3.8'
+
+# Keycloak development stack for testing MCP Janus
+# Usage: docker compose -f docker-compose.keycloak.yaml up -d
+# Then run: ./scripts/keycloak/setup-keycloak.sh
+#
+# Keycloak admin console: http://localhost:8888  (admin / admin)
+# Realm:                  mcp-dev
+# Proxy port:             8080
+
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    container_name: keycloak-dev
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+      KC_HTTP_PORT: 8888
+      KC_HEALTH_ENABLED: "true"
+      KC_METRICS_ENABLED: "true"
+      # Dev mode: no TLS, ephemeral H2 database
+    ports:
+      - "8888:8888"
+    command: start-dev --http-port=8888
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8888/health/ready || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 12
+      start_period: 60s
+    networks:
+      - mcp-keycloak
+
+  mcpserver:
+    build:
+      context: .
+      dockerfile: Dockerfile.mcpserver
+    container_name: mcp-test-server
+    ports:
+      - "8081:8081"
+    networks:
+      - mcp-keycloak
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+networks:
+  mcp-keycloak:
+    driver: bridge

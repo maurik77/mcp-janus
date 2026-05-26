@@ -36,6 +36,9 @@ type ProxyAuthHandler struct {
 	jwksMu              sync.RWMutex
 	tracer              trace.Tracer
 	httpClient          *http.Client
+	cimdCache           *cimdCache
+	cimdFetcher         func(url string, client *http.Client, cache *cimdCache) (*ClientMetadataDocument, error)
+	jtiStore            *jtiStore
 }
 
 // withRetry calls fn up to attempts times, waiting delay between failures.
@@ -79,7 +82,6 @@ func New(cfg config.Config, encryption utility.Encryption) (Service, error) {
 	jwks, err := withRetry(retryAttempts, retryDelay, func() (*JWKS, error) {
 		return fetchJWKS(openidConfiguration.JWKSEndpoint, cfg.IDP.SkipTLSVerify)
 	})
-
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch JWKS after %d attempts: %w", retryAttempts, err)
 	}
@@ -103,19 +105,23 @@ func New(cfg config.Config, encryption utility.Encryption) (Service, error) {
 		jwks:                jwks,
 		tracer:              otel.Tracer("mcp-proxy.auth"),
 		httpClient:          newHTTPClient(cfg.IDP.SkipTLSVerify),
+		cimdCache:           &cimdCache{entries: make(map[string]cimdCacheEntry)},
+		cimdFetcher:         fetchAndValidateCIMD,
+		jtiStore:            newJTIStore(),
 	}
+
 	utility.Logger.Info().
 		Str("issuer", openidConfiguration.Issuer).
 		Int("jwks_keys", len(jwks.Keys)).
 		Msg("Auth service initialized")
 	utility.Logger.Debug().
 		Str("idp_client_id", cfg.IDP.ClientID).
-		Str("idp_client_secret", cfg.IDP.ClientSecret).
 		Str("redirect_url", cfg.Proxy.BaseURL+"/callback").
 		Str("auth_url", openidConfiguration.AuthorizationEndpoint).
 		Str("token_url", openidConfiguration.TokenEndpoint).
 		Strs("scopes", cfg.IDP.Scopes).
 		Msg("[DEBUG] New: oauth config")
+
 	return handler, nil
 }
 
@@ -137,7 +143,6 @@ func (h *ProxyAuthHandler) RegisterClient(ctx context.Context, req *RegisterRequ
 	}
 
 	clientId, secret, err := generateClientID(req, h.encryption)
-
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "Failed to generate client ID")
@@ -163,7 +168,6 @@ func (h *ProxyAuthHandler) RegisterClient(ctx context.Context, req *RegisterRequ
 	utility.Logger.Info().Str("client_id", clientId).Msg("Client registered successfully")
 	utility.Logger.Debug().
 		Str("client_id", clientId).
-		Str("client_secret", secret).
 		Msg("[DEBUG] RegisterClient: credentials issued")
 
 	return &res, nil
@@ -214,32 +218,47 @@ func (h *ProxyAuthHandler) AuthenticateRequest(ctx context.Context, req *Authent
 		attribute.String("code_challenge_method", req.CodeChallengeMethod),
 	)
 
-	clientData, err := DecodeClientID(req.ClientID, h.encryption)
-	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, "Failed to decode client ID")
-		utility.Logger.Warn().Err(err).Str("client_id", req.ClientID).Msg("AuthenticateRequest: failed to decode client_id")
-		return "", fmt.Errorf("invalid_request")
-	}
-
-	utility.Logger.Debug().
-		Strs("registered_redirect_uris", clientData.RedirectURIs).
-		Str("requested_redirect_uri", req.RedirectURI).
-		Msg("[DEBUG] AuthenticateRequest: decoded client data")
-
-	if !slices.Contains(clientData.RedirectURIs, req.RedirectURI) {
-		span.SetStatus(codes.Error, "Invalid redirect URI")
-		utility.Logger.Warn().
-			Str("client_id", req.ClientID).
-			Str("redirect_uri", req.RedirectURI).
-			Msg("AuthenticateRequest: redirect_uri not registered for client")
-		return "", fmt.Errorf("invalid_request")
+	portInsensitive := h.config.Proxy.CIMDLocalhostPortInsensitive
+	if isURLClientID(req.ClientID) {
+		doc, err := h.cimdFetcher(req.ClientID, h.httpClient, h.cimdCache)
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "Failed to fetch client metadata document")
+			utility.Logger.Warn().Err(err).Str("client_id", req.ClientID).Msg("AuthenticateRequest: CIMD fetch failed")
+			return "", fmt.Errorf("invalid_client")
+		}
+		if !redirectURIMatchesRegistered(req.RedirectURI, doc.RedirectURIs, portInsensitive) {
+			span.SetStatus(codes.Error, "Invalid redirect URI")
+			utility.Logger.Warn().Str("client_id", req.ClientID).Str("redirect_uri", req.RedirectURI).Msg("AuthenticateRequest: redirect_uri not in CIMD document")
+			return "", fmt.Errorf("invalid_request")
+		}
+	} else {
+		clientData, err := DecodeClientID(req.ClientID, h.encryption)
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "Failed to decode client ID")
+			utility.Logger.Warn().Err(err).Str("client_id", req.ClientID).Msg("AuthenticateRequest: failed to decode client_id")
+			return "", fmt.Errorf("invalid_request")
+		}
+		utility.Logger.Debug().
+			Strs("registered_redirect_uris", clientData.RedirectURIs).
+			Str("requested_redirect_uri", req.RedirectURI).
+			Msg("[DEBUG] AuthenticateRequest: decoded client data")
+		if !slices.Contains(clientData.RedirectURIs, req.RedirectURI) {
+			span.SetStatus(codes.Error, "Invalid redirect URI")
+			utility.Logger.Warn().
+				Str("client_id", req.ClientID).
+				Str("redirect_uri", req.RedirectURI).
+				Msg("AuthenticateRequest: redirect_uri not registered for client")
+			return "", fmt.Errorf("invalid_request")
+		}
 	}
 
 	stateData := StateData{
 		OriginalState: req.State,
 		RedirectURI:   req.RedirectURI,
 		ClientID:      req.ClientID,
+		Resource:      req.Resource,
 	}
 
 	encryptedState, err := stateData.Encode(h.encryption)
@@ -253,15 +272,18 @@ func (h *ProxyAuthHandler) AuthenticateRequest(ctx context.Context, req *Authent
 		Str("encrypted_state", encryptedState).
 		Msg("[DEBUG] AuthenticateRequest: state encrypted")
 
-	authURL := h.oauthConfig.AuthCodeURL(
-		encryptedState,
+	// Redirect to real IdP
+	authParams := []oauth2.AuthCodeOption{
 		oauth2.SetAuthURLParam("code_challenge", req.CodeChallenge),
 		oauth2.SetAuthURLParam("code_challenge_method", req.CodeChallengeMethod),
 		oauth2.SetAuthURLParam("redirect_uri", h.config.Proxy.BaseURL+"/callback"),
-	)
+	}
+	if req.Resource != "" {
+		authParams = append(authParams, oauth2.SetAuthURLParam("resource", req.Resource))
+	}
+	authURL := h.oauthConfig.AuthCodeURL(encryptedState, authParams...)
 
 	span.SetStatus(codes.Ok, "Authentication request successful")
-
 	utility.Logger.Info().Str("auth_url", authURL).Msg("Authentication request successful")
 
 	return authURL, nil
@@ -277,6 +299,7 @@ func (h *ProxyAuthHandler) ManageAuthorizationCode(ctx context.Context, req *Aut
 		Str("code", req.Code).
 		Str("encrypted_state", req.State).
 		Msg("[DEBUG] ManageAuthorizationCode: request received")
+
 	stateData, err := DecodeStateData(req.State, h.encryption)
 	if err != nil {
 		utility.Logger.Warn().Err(err).Msg("ManageAuthorizationCode: failed to decode state")
@@ -289,25 +312,39 @@ func (h *ProxyAuthHandler) ManageAuthorizationCode(ctx context.Context, req *Aut
 		Str("redirect_uri", stateData.RedirectURI).
 		Msg("[DEBUG] ManageAuthorizationCode: decoded state")
 
-	clientData, err := DecodeClientID(stateData.ClientID, h.encryption)
-	if err != nil {
-		utility.Logger.Warn().Err(err).Str("client_id", stateData.ClientID).Msg("ManageAuthorizationCode: failed to decode client_id")
-		return nil, nil, fmt.Errorf("invalid_request")
+	portInsensitive := h.config.Proxy.CIMDLocalhostPortInsensitive
+
+	// Validate redirect URI against registered client or CIMD document
+	if isURLClientID(stateData.ClientID) {
+		doc, err := h.cimdFetcher(stateData.ClientID, h.httpClient, h.cimdCache)
+		if err != nil {
+			utility.Logger.Warn().Err(err).Str("client_id", stateData.ClientID).Msg("ManageAuthorizationCode: CIMD fetch failed")
+			return nil, nil, fmt.Errorf("invalid_request")
+		}
+		if !redirectURIMatchesRegistered(stateData.RedirectURI, doc.RedirectURIs, portInsensitive) {
+			utility.Logger.Warn().Str("client_id", stateData.ClientID).Str("redirect_uri", stateData.RedirectURI).Msg("ManageAuthorizationCode: redirect_uri not in CIMD document")
+			return nil, nil, fmt.Errorf("invalid_request")
+		}
+	} else {
+		clientData, err := DecodeClientID(stateData.ClientID, h.encryption)
+		if err != nil {
+			utility.Logger.Warn().Err(err).Str("client_id", stateData.ClientID).Msg("ManageAuthorizationCode: failed to decode client_id")
+			return nil, nil, fmt.Errorf("invalid_request")
+		}
+		utility.Logger.Debug().
+			Strs("registered_redirect_uris", clientData.RedirectURIs).
+			Str("state_redirect_uri", stateData.RedirectURI).
+			Msg("[DEBUG] ManageAuthorizationCode: decoded client data")
+		if !slices.Contains(clientData.RedirectURIs, stateData.RedirectURI) {
+			utility.Logger.Warn().
+				Str("client_id", stateData.ClientID).
+				Str("redirect_uri", stateData.RedirectURI).
+				Msg("ManageAuthorizationCode: redirect_uri not registered for client")
+			return nil, nil, fmt.Errorf("invalid_request")
+		}
 	}
 
-	utility.Logger.Debug().
-		Strs("registered_redirect_uris", clientData.RedirectURIs).
-		Str("state_redirect_uri", stateData.RedirectURI).
-		Msg("[DEBUG] ManageAuthorizationCode: decoded client data")
-
-	if !slices.Contains(clientData.RedirectURIs, stateData.RedirectURI) {
-		utility.Logger.Warn().
-			Str("client_id", stateData.ClientID).
-			Str("redirect_uri", stateData.RedirectURI).
-			Msg("ManageAuthorizationCode: redirect_uri not registered for client")
-		return nil, nil, fmt.Errorf("invalid_request")
-	}
-
+	// Validate redirect URI is a well-formed absolute URL with http(s) scheme
 	redirectURL, err := url.Parse(stateData.RedirectURI)
 	if err != nil {
 		utility.Logger.Warn().Err(err).Str("redirect_uri", stateData.RedirectURI).Msg("ManageAuthorizationCode: invalid redirect_uri")
@@ -323,6 +360,15 @@ func (h *ProxyAuthHandler) ManageAuthorizationCode(ctx context.Context, req *Aut
 		State: stateData.OriginalState,
 		Code:  req.Code,
 	}
+
+	// Append iss to redirect (RFC 9207 §2): binds the auth response to this AS.
+	issuer := h.config.Proxy.Issuer
+	if issuer == "" {
+		issuer = h.config.Proxy.BaseURL
+	}
+	q := redirectURL.Query()
+	q.Set("iss", issuer)
+	redirectURL.RawQuery = q.Encode()
 
 	utility.Logger.Info().
 		Str("client_id", stateData.ClientID).
@@ -344,7 +390,6 @@ func (h *ProxyAuthHandler) RetrieveAccessToken(ctx context.Context, req *AccessT
 
 	utility.Logger.Debug().
 		Str("client_id", req.ClientID).
-		Str("client_secret", req.ClientSecret).
 		Str("code", req.Code).
 		Str("code_verifier", req.CodeVerifier).
 		Str("redirect_uri", req.RedirectURI).
@@ -359,12 +404,10 @@ func (h *ProxyAuthHandler) RetrieveAccessToken(ctx context.Context, req *AccessT
 
 	if req.ClientID != "" {
 		span.SetAttributes(attribute.String("client.id", req.ClientID))
-		// Only validate secret when the client provided one (confidential clients).
-		// Public clients (token_endpoint_auth_method=none) rely on PKCE instead.
-		if err := h.validateClientCredentials(req.ClientID, req.ClientSecret); err != nil {
+		if err := h.validateClientAuth(ctx, req); err != nil {
 			span.RecordError(err)
-			span.SetStatus(codes.Error, "Invalid client credentials")
-			utility.Logger.Warn().Str("client_id", req.ClientID).Msg("RetrieveAccessToken: invalid client credentials")
+			span.SetStatus(codes.Error, "Client authentication failed")
+			utility.Logger.Warn().Err(err).Str("client_id", req.ClientID).Msg("RetrieveAccessToken: client authentication failed")
 			return nil, err
 		}
 	}
@@ -375,13 +418,14 @@ func (h *ProxyAuthHandler) RetrieveAccessToken(ctx context.Context, req *AccessT
 		httpClient = http.DefaultClient
 	}
 	oauthCtx := context.WithValue(ctx, oauth2.HTTPClient, httpClient)
-	token, err := h.oauthConfig.Exchange(
-		oauthCtx,
-		req.Code,
+	exchangeParams := []oauth2.AuthCodeOption{
 		oauth2.SetAuthURLParam("grant_type", req.GrantTypes),
 		oauth2.SetAuthURLParam("code_verifier", req.CodeVerifier),
-	)
-
+	}
+	if req.Resource != "" {
+		exchangeParams = append(exchangeParams, oauth2.SetAuthURLParam("resource", req.Resource))
+	}
+	token, err := h.oauthConfig.Exchange(oauthCtx, req.Code, exchangeParams...)
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "Token exchange failed")
@@ -411,7 +455,6 @@ func (h *ProxyAuthHandler) RetrieveAccessToken(ctx context.Context, req *AccessT
 	}
 
 	span.SetStatus(codes.Ok, "Token exchange successful")
-
 	utility.Logger.Info().
 		Str("client_id", req.ClientID).
 		Str("token_type", opaqueToken.TokenType).
@@ -434,7 +477,6 @@ func (h *ProxyAuthHandler) RefreshToken(ctx context.Context, req *RefreshTokenRe
 	utility.Logger.Debug().
 		Str("grant_type", req.GrantType).
 		Str("client_id", req.ClientID).
-		Str("client_secret", req.ClientSecret).
 		Str("encrypted_refresh_token", req.RefreshToken).
 		Msg("[DEBUG] RefreshToken: request received")
 
@@ -539,7 +581,6 @@ func generateClientID(req *RegisterRequest, encryption utility.Encryption) (stri
 
 	utility.Logger.Debug().
 		Strs("redirect_uris", clientData.RedirectURIs).
-		Str("secret", clientData.Secret).
 		Msg("[DEBUG] generateClientID: client data before encoding")
 
 	encryptedClientID, err := clientData.Encode(encryption)
@@ -549,6 +590,33 @@ func generateClientID(req *RegisterRequest, encryption utility.Encryption) (stri
 		Msg("[DEBUG] generateClientID: encrypted client_id")
 
 	return encryptedClientID, clientSecret, err
+}
+
+// validateClientAuth authenticates the client at the token endpoint.
+// Supports three modes:
+//  1. CIMD URL client_id with private_key_jwt assertion (ChatGPT pattern)
+//  2. CIMD URL client_id without assertion → public client, PKCE-only, no secret needed
+//  3. Opaque encrypted client_id → validate stored secret
+func (h *ProxyAuthHandler) validateClientAuth(ctx context.Context, req *AccessTokenRequest) error {
+	const assertionType = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
+
+	if isURLClientID(req.ClientID) {
+		if req.ClientAssertionType == assertionType && req.ClientAssertion != "" {
+			return h.validatePrivateKeyJWT(ctx, req)
+		}
+		// Public CIMD client — PKCE is the only authentication factor; no secret needed.
+		return nil
+	}
+
+	// Opaque encrypted client_id (DCR path).
+	clientData, err := DecodeClientID(req.ClientID, h.encryption)
+	if err != nil {
+		return fmt.Errorf("invalid_request")
+	}
+	if clientData.Secret != req.ClientSecret {
+		return fmt.Errorf("invalid_client")
+	}
+	return nil
 }
 
 // validateClientCredentials decodes the opaque client_id and, when a secret is
@@ -561,13 +629,83 @@ func (h *ProxyAuthHandler) validateClientCredentials(clientID, clientSecret stri
 	}
 	utility.Logger.Debug().
 		Str("client_id", clientID).
-		Str("stored_secret", clientData.Secret).
-		Str("provided_secret", clientSecret).
 		Bool("match", clientData.Secret == clientSecret).
 		Msg("[DEBUG] validateClientCredentials: client secret comparison")
 	if clientSecret != "" && clientData.Secret != clientSecret {
 		return fmt.Errorf("invalid_request")
 	}
+	return nil
+}
+
+// validatePrivateKeyJWT verifies a client_assertion JWT per RFC 7523.
+// It fetches the client's JWKS from the CIMD document's jwks_uri, then validates:
+//   - iss == sub == client_id
+//   - aud contains the token endpoint URL
+//   - exp not in the past
+//   - jti not previously seen (replay protection)
+func (h *ProxyAuthHandler) validatePrivateKeyJWT(_ context.Context, req *AccessTokenRequest) error {
+	doc, err := h.cimdFetcher(req.ClientID, h.httpClient, h.cimdCache)
+	if err != nil {
+		return fmt.Errorf("invalid_client")
+	}
+	if doc.JwksURI == "" {
+		utility.Logger.Warn().Str("client_id", req.ClientID).Msg("validatePrivateKeyJWT: CIMD doc has no jwks_uri")
+		return fmt.Errorf("invalid_client")
+	}
+
+	jwks, err := fetchJWKS(doc.JwksURI, false)
+	if err != nil {
+		utility.Logger.Warn().Err(err).Str("jwks_uri", doc.JwksURI).Msg("validatePrivateKeyJWT: failed to fetch client JWKS")
+		return fmt.Errorf("invalid_client")
+	}
+
+	tokenEndpoint := h.config.Proxy.BaseURL + "/token"
+
+	token, err := jwt.Parse(req.ClientAssertion, func(t *jwt.Token) (any, error) {
+		kid, _ := t.Header["kid"].(string)
+		key := jwks.GetKeyByKID(kid)
+		if key == nil {
+			return nil, fmt.Errorf("key %q not found in client JWKS", kid)
+		}
+		return key, nil
+	})
+	if err != nil || !token.Valid {
+		utility.Logger.Warn().Err(err).Str("client_id", req.ClientID).Msg("validatePrivateKeyJWT: JWT parse/validation failed")
+		return fmt.Errorf("invalid_client")
+	}
+
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		return fmt.Errorf("invalid_client")
+	}
+
+	iss, _ := claims["iss"].(string)
+	sub, _ := claims["sub"].(string)
+	if iss != req.ClientID || sub != req.ClientID {
+		utility.Logger.Warn().Str("iss", iss).Str("sub", sub).Str("client_id", req.ClientID).Msg("validatePrivateKeyJWT: iss/sub mismatch")
+		return fmt.Errorf("invalid_client")
+	}
+
+	if !jwtAudienceContains(claims, tokenEndpoint) {
+		utility.Logger.Warn().Str("client_id", req.ClientID).Msg("validatePrivateKeyJWT: audience mismatch")
+		return fmt.Errorf("invalid_client")
+	}
+
+	jti, _ := claims["jti"].(string)
+	if jti == "" {
+		utility.Logger.Warn().Str("client_id", req.ClientID).Msg("validatePrivateKeyJWT: missing jti")
+		return fmt.Errorf("invalid_client")
+	}
+
+	exp, err := claims.GetExpirationTime()
+	if err != nil || exp == nil {
+		return fmt.Errorf("invalid_client")
+	}
+	if h.jtiStore.Seen(jti, exp.Time) {
+		utility.Logger.Warn().Str("jti", jti).Msg("validatePrivateKeyJWT: replayed jti")
+		return fmt.Errorf("invalid_client")
+	}
+
 	return nil
 }
 
@@ -633,11 +771,9 @@ func (h *ProxyAuthHandler) ValidateJWT(ctx context.Context, tokenString string) 
 	}
 
 	options := []jwt.ParserOption{}
-
 	if h.config.IDP.JWTLeeway > 0 {
 		options = append(options, jwt.WithLeeway(h.config.IDP.JWTLeeway))
 	}
-
 	utility.Logger.Debug().
 		Dur("leeway", h.config.IDP.JWTLeeway).
 		Msg("[DEBUG] ValidateJWT: parser options")
@@ -781,4 +917,24 @@ func (h *ProxyAuthHandler) refreshJWKS() error {
 	h.jwksMu.Unlock()
 	utility.Logger.Info().Msg("JWKS refreshed successfully")
 	return nil
+}
+
+// jwtAudienceContains reports whether the "aud" claim in claims contains target.
+// Per RFC 7519 §4.1.3, aud may be a single string or an array of strings.
+func jwtAudienceContains(claims jwt.MapClaims, target string) bool {
+	raw, ok := claims["aud"]
+	if !ok {
+		return false
+	}
+	switch v := raw.(type) {
+	case string:
+		return v == target
+	case []any:
+		for _, a := range v {
+			if s, ok := a.(string); ok && s == target {
+				return true
+			}
+		}
+	}
+	return false
 }

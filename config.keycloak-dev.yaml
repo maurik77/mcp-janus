@@ -1,0 +1,55 @@
+# config.keycloak-dev.yaml
+# MCP Janus configuration for local Keycloak testing.
+#
+# Usage:
+#   CONFIG_PATH=. MCP_IDP_CLIENT_SECRET=<secret> ./bin/mcpproxy
+#   (pass the secret printed by scripts/keycloak/setup-keycloak.sh)
+#
+# Or copy to config.yaml and set MCP_IDP_CLIENT_SECRET in your shell.
+
+proxy:
+  base_url: http://localhost:8080
+  listen_addr: ":8080"
+  log_level: debug
+  log_format: text
+  cimd_enabled: false
+  cimd_localhost_port_insensitive: true
+
+idp:
+  # Keycloak client created by setup-keycloak.sh
+  client_id: mcp-janus
+  # Override via env: export MCP_IDP_CLIENT_SECRET=<value from setup script>
+  client_secret: CHANGE_ME
+  openid_configuration_url: http://localhost:8888/realms/mcp-dev/.well-known/openid-configuration
+  jwt_leeway: 30s
+  skip_tls_verify: false
+  fetch_retry_attempts: 5
+  fetch_retry_delay: 3s
+  scopes:
+    - openid
+    - profile
+    - email
+    - offline_access
+  # Map Keycloak JWT claims → upstream request headers
+  claims_mapping:
+    sub: X-User-Sub
+    name: X-User-Full-Name
+    email: X-User-Email
+    preferred_username: X-User-Username
+
+# 64-char hex key (32 bytes AES-256). Replace with a real random key in production:
+#   openssl rand -hex 32
+encryption:
+  master_key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+
+telemetry:
+  enabled: false
+  service_name: mcp-proxy-dev
+  service_version: 0.0.0-dev
+  otlp_endpoint: localhost:4317
+
+upstream:
+  name: weather-test
+  resource: http://localhost:8081
+  base_url: http://localhost:8081
+  path_prefix: /mcp
