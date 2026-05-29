@@ -34,7 +34,7 @@ MCP Client → [opaque bearer token] → Proxy (Gin HTTP) → [real IdP token] �
                                    Identity Provider (OAuth 2.1 + PKCE)
 ```
 
-**Core flow**: Client registers via RFC 7591 → OAuth authorization code flow with PKCE → proxy encrypts IdP token into opaque bearer → client uses opaque token → proxy decrypts, validates JWT, forwards with real token to upstream.
+**Core flow**: Client registers via RFC 7591 → OAuth authorization code flow with PKCE → proxy validates JWT via JWKS and encrypts IdP token into opaque bearer → client uses opaque token → proxy decrypts, checks expiry (AEAD guarantees integrity, no per-request JWKS call), forwards upstream.
 
 ### Key Packages
 
@@ -45,7 +45,7 @@ MCP Client → [opaque bearer token] → Proxy (Gin HTTP) → [real IdP token] �
 - **`internal/service/auth/jwks.go`** — JWKS key fetching from IdP for JWT validation.
 - **`internal/service/auth/openidconfig.go`** — OpenID Connect discovery configuration fetching.
 - **`internal/service/metadata/`** — RFC 9728 OAuth Protected Resource Metadata and OpenID discovery responses.
-- **`internal/server/impl.go`** — Reverse proxy implementation: auth middleware (decrypt opaque token, validate JWT), proxy handler (forward to upstream with real token), claims-to-headers mapping.
+- **`internal/server/impl.go`** — Reverse proxy implementation: auth middleware (`resolveToken` — decrypt opaque token, check expiry, map claims), proxy handler (forward to upstream with real token).
 - **`internal/utility/encryption.go`** — AES-256-GCM AEAD encryption/decryption for opaque tokens, client IDs, and refresh tokens.
 - **`internal/infrastructure/config/config.go`** — Viper-based YAML config with `MCP_` prefixed env var overrides.
 - **`internal/infrastructure/telemetry/`** — OpenTelemetry tracing + metrics setup with OTLP exporters.

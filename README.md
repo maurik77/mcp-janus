@@ -26,7 +26,7 @@ The security impact is real:
 
 ## What Janus Does
 
-Janus sits in front of any MCP server and runs the complete OAuth 2.1 + PKCE flow on behalf of clients. After exchanging an authorization code with the real IdP, it **encrypts the IdP JWT with AES-256-GCM** and gives the client an opaque blob instead. On every subsequent request it decrypts, validates, and forwards the real JWT upstream — invisibly.
+Janus sits in front of any MCP server and runs the complete OAuth 2.1 + PKCE flow on behalf of clients. After exchanging an authorization code with the real IdP, it **encrypts the IdP JWT with AES-256-GCM** and gives the client an opaque blob instead. On every subsequent request it decrypts the opaque token, checks expiry, and forwards upstream — invisibly. AEAD encryption guarantees content integrity, so no per-request JWKS call is needed.
 
 **The client never sees, decodes, or replays the real token. Zero token passthrough. Full MCP spec compliance.**
 
@@ -62,7 +62,7 @@ MCP Client                        MCP Janus Proxy                    Upstream MC
 
 - **Opaque encrypted tokens** — AES-256-GCM (AEAD) wraps every IdP JWT; clients only ever see ciphertext
 - **No token passthrough** — proxy issues its own tokens, never forwards client tokens upstream
-- **JWT validation** — full claim validation (expiry, audience, issuer) with JWKS key fetching and automatic rotation
+- **JWT validation at issuance** — full claim validation (expiry, audience, issuer) with JWKS key fetching and automatic key rotation; AEAD integrity eliminates per-request JWKS calls
 - **Claims-to-headers mapping** — configurable IdP claim injection into upstream HTTP headers
 - **Encrypted client credentials** — dynamic registration returns AEAD-encrypted `client_id` / `client_secret`
 - **Self-issued token mode** — Janus can issue its own long-lived tokens (configurable TTL) for MCP clients like Claude and ChatGPT that do not support token refresh
@@ -154,7 +154,7 @@ curl http://localhost:8080/.well-known/oauth-protected-resource | jq .
 2. **Authorize** — client redirects to `GET /auth` with PKCE `code_challenge`. Proxy redirects to the real IdP.
 3. **Callback** — IdP redirects back to `GET /callback`. Proxy receives the authorization code.
 4. **Token exchange** — client calls `POST /token` with `code_verifier`. Proxy exchanges with the IdP, receives the real JWT, encrypts it with AES-256-GCM, and returns an opaque bearer to the client.
-5. **Authenticated requests** — client sends `Authorization: Bearer <opaque>` to `/mcp/*`. Proxy decrypts, validates the JWT, maps claims to headers, and forwards with the real token.
+5. **Authenticated requests** — client sends `Authorization: Bearer <opaque>` to `/mcp/*`. Proxy decrypts the opaque token, checks expiry (AEAD guarantees content integrity — no JWKS call needed), maps claims to headers, and forwards.
 6. **Refresh** — client calls `POST /refresh` with the encrypted refresh token. Proxy decrypts, refreshes with the IdP, re-encrypts, and returns a new opaque bearer.
 
 ### Self-issued token mode (`token_behavior: self_issued`)
@@ -172,7 +172,7 @@ Some MCP clients (Claude, ChatGPT) complete the OAuth flow once and never call `
 | --- | --- | --- |
 | Token lifetime | IdP-controlled (e.g. 1 h) | Janus-controlled (e.g. 720 h) |
 | IdP revocation effective within | ~1 h | up to `token_max_ttl` |
-| JWKS call per request | yes (cached) | no |
+| JWKS call per request | no (AEAD guarantees integrity) | no |
 | Claims freshness | refreshed at IdP token renewal | frozen until `token_max_ttl` |
 | Clients without refresh support | session expires hourly | full `token_ttl` duration |
 
