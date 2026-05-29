@@ -171,9 +171,9 @@ Alcuni client MCP (Claude, ChatGPT) completano il flusso OAuth una sola volta e 
 | | `proxy` | `self_issued` |
 |---|---|---|
 | Durata token | Controllata dall'IdP (es. 1 h) | Controllata da Janus (es. 720 h) |
-| Revoca IdP efficace entro | ~1 h | fino a `token_ttl` |
+| Revoca IdP efficace entro | ~1 h | fino a `token_max_ttl` |
 | Chiamata JWKS per richiesta | sì (con cache) | no |
-| Freschezza dei claim | ad ogni richiesta | congelati al login |
+| Freschezza dei claim | aggiornati al rinnovo del JWT IdP | congelati fino a `token_max_ttl` |
 | Client senza refresh | sessione scade ogni ora | durata intera di `token_ttl` |
 
 ### Crittografia dei token

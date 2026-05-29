@@ -171,9 +171,9 @@ Some MCP clients (Claude, ChatGPT) complete the OAuth flow once and never call `
 | | `proxy` | `self_issued` |
 | --- | --- | --- |
 | Token lifetime | IdP-controlled (e.g. 1 h) | Janus-controlled (e.g. 720 h) |
-| IdP revocation effective within | ~1 h | up to `token_ttl` |
+| IdP revocation effective within | ~1 h | up to `token_max_ttl` |
 | JWKS call per request | yes (cached) | no |
-| Claims freshness | every request | frozen at login |
+| Claims freshness | refreshed at IdP token renewal | frozen until `token_max_ttl` |
 | Clients without refresh support | session expires hourly | full `token_ttl` duration |
 
 ### Token encryption
