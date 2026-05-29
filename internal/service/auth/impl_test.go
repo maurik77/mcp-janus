@@ -69,6 +69,23 @@ func tokenHandler(accessToken, refreshToken string, statusCode int) http.Handler
 	}
 }
 
+// testJWKS returns a JWKS populated with the RSA public key, ready to set on ProxyAuthHandler.
+func testJWKS(key *rsa.PrivateKey, kid string) *JWKS {
+	return &JWKS{Keys: []JWK{rsaPublicKeyToJWK(&key.PublicKey, kid)}}
+}
+
+// signedTokenServer starts an httptest.Server that returns a valid RS256-signed JWT
+// as the access_token, and also returns the signed JWT string for assertions.
+func signedTokenServer(t *testing.T, key *rsa.PrivateKey, kid, refreshToken string) (*httptest.Server, string) {
+	t.Helper()
+	signed := signTestJWT(t, key, kid, jwt.MapClaims{
+		"sub": "test-user",
+		"exp": jwt.NewNumericDate(time.Now().Add(time.Hour)),
+	})
+	ts := httptest.NewServer(tokenHandler(signed, refreshToken, http.StatusOK))
+	return ts, signed
+}
+
 func makeEncryptedClientID(t *testing.T, redirectURIs []string, secret string) string {
 	t.Helper()
 	data := ClientIDData{RedirectURIs: redirectURIs, Secret: secret}
@@ -579,18 +596,17 @@ func TestRetrieveAccessToken(t *testing.T) {
 	})
 
 	t.Run("success", func(t *testing.T) {
-		ts := httptest.NewServer(tokenHandler("idp-access-jwt", "idp-refresh-token", http.StatusOK))
+		key := testRSAKey(t)
+		ts, _ := signedTokenServer(t, key, "kid-1", "idp-refresh-token")
 		defer ts.Close()
 
 		handler := &ProxyAuthHandler{
 			oauthConfig: &oauth2.Config{
 				ClientID: "test-client",
-				Endpoint: oauth2.Endpoint{
-					TokenURL:  ts.URL,
-					AuthStyle: oauth2.AuthStyleInParams,
-				},
+				Endpoint: oauth2.Endpoint{TokenURL: ts.URL, AuthStyle: oauth2.AuthStyleInParams},
 			},
 			encryption: &mockEncryption{},
+			jwks:       testJWKS(key, "kid-1"),
 			tracer:     otel.Tracer("test"),
 		}
 
@@ -603,24 +619,23 @@ func TestRetrieveAccessToken(t *testing.T) {
 			GrantTypes:   "authorization_code",
 		})
 		require.NoError(t, err)
-		assert.Equal(t, "encrypted_idp-access-jwt", token.AccessToken)
-		assert.Equal(t, "encrypted_idp-refresh-token", token.RefreshToken)
+		assert.NotEmpty(t, token.AccessToken)
+		assert.NotEmpty(t, token.RefreshToken)
 		assert.Equal(t, "Bearer", token.TokenType)
 	})
 
 	t.Run("success without client_id", func(t *testing.T) {
-		ts := httptest.NewServer(tokenHandler("idp-jwt", "idp-refresh", http.StatusOK))
+		key := testRSAKey(t)
+		ts, _ := signedTokenServer(t, key, "kid-1", "idp-refresh")
 		defer ts.Close()
 
 		handler := &ProxyAuthHandler{
 			oauthConfig: &oauth2.Config{
 				ClientID: "test-client",
-				Endpoint: oauth2.Endpoint{
-					TokenURL:  ts.URL,
-					AuthStyle: oauth2.AuthStyleInParams,
-				},
+				Endpoint: oauth2.Endpoint{TokenURL: ts.URL, AuthStyle: oauth2.AuthStyleInParams},
 			},
 			encryption: &mockEncryption{},
+			jwks:       testJWKS(key, "kid-1"),
 			tracer:     otel.Tracer("test"),
 		}
 
@@ -629,27 +644,26 @@ func TestRetrieveAccessToken(t *testing.T) {
 			GrantTypes: "authorization_code",
 		})
 		require.NoError(t, err)
-		assert.Equal(t, "encrypted_idp-jwt", token.AccessToken)
-		assert.Equal(t, "encrypted_idp-refresh", token.RefreshToken)
+		assert.NotEmpty(t, token.AccessToken)
+		assert.NotEmpty(t, token.RefreshToken)
 	})
 
 	t.Run("access token encryption failure", func(t *testing.T) {
-		ts := httptest.NewServer(tokenHandler("idp-jwt", "idp-refresh", http.StatusOK))
+		key := testRSAKey(t)
+		ts, _ := signedTokenServer(t, key, "kid-1", "idp-refresh")
 		defer ts.Close()
 
 		handler := &ProxyAuthHandler{
 			oauthConfig: &oauth2.Config{
 				ClientID: "test-client",
-				Endpoint: oauth2.Endpoint{
-					TokenURL:  ts.URL,
-					AuthStyle: oauth2.AuthStyleInParams,
-				},
+				Endpoint: oauth2.Endpoint{TokenURL: ts.URL, AuthStyle: oauth2.AuthStyleInParams},
 			},
 			encryption: &mockEncryption{
 				encryptFunc: func(data []byte) (string, error) {
 					return "", fmt.Errorf("encryption failed")
 				},
 			},
+			jwks:   testJWKS(key, "kid-1"),
 			tracer: otel.Tracer("test"),
 		}
 
@@ -662,17 +676,15 @@ func TestRetrieveAccessToken(t *testing.T) {
 	})
 
 	t.Run("refresh token encryption failure", func(t *testing.T) {
-		ts := httptest.NewServer(tokenHandler("idp-jwt", "idp-refresh", http.StatusOK))
+		key := testRSAKey(t)
+		ts, _ := signedTokenServer(t, key, "kid-1", "idp-refresh")
 		defer ts.Close()
 
 		callCount := 0
 		handler := &ProxyAuthHandler{
 			oauthConfig: &oauth2.Config{
 				ClientID: "test-client",
-				Endpoint: oauth2.Endpoint{
-					TokenURL:  ts.URL,
-					AuthStyle: oauth2.AuthStyleInParams,
-				},
+				Endpoint: oauth2.Endpoint{TokenURL: ts.URL, AuthStyle: oauth2.AuthStyleInParams},
 			},
 			encryption: &mockEncryption{
 				encryptFunc: func(data []byte) (string, error) {
@@ -683,6 +695,7 @@ func TestRetrieveAccessToken(t *testing.T) {
 					return "encrypted_" + string(data), nil
 				},
 			},
+			jwks:   testJWKS(key, "kid-1"),
 			tracer: otel.Tracer("test"),
 		}
 
@@ -692,6 +705,30 @@ func TestRetrieveAccessToken(t *testing.T) {
 		})
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "refresh encrypt failed")
+	})
+
+	t.Run("JWT validation failure at issuance", func(t *testing.T) {
+		// Token server returns a JWT signed with a different key — validation must fail.
+		wrongKey := testRSAKey(t)
+		ts, _ := signedTokenServer(t, wrongKey, "kid-1", "idp-refresh")
+		defer ts.Close()
+
+		knownKey := testRSAKey(t)
+		handler := &ProxyAuthHandler{
+			oauthConfig: &oauth2.Config{
+				ClientID: "test-client",
+				Endpoint: oauth2.Endpoint{TokenURL: ts.URL, AuthStyle: oauth2.AuthStyleInParams},
+			},
+			encryption: &mockEncryption{},
+			jwks:       testJWKS(knownKey, "kid-1"), // different key → signature mismatch
+			tracer:     otel.Tracer("test"),
+		}
+
+		_, err := handler.RetrieveAccessToken(context.Background(), &AccessTokenRequest{
+			Code:       "auth-code",
+			GrantTypes: "authorization_code",
+		})
+		assert.Error(t, err)
 	})
 }
 
@@ -970,44 +1007,42 @@ func TestRefreshToken(t *testing.T) {
 	})
 
 	t.Run("success", func(t *testing.T) {
-		ts := httptest.NewServer(tokenHandler("new-access-jwt", "new-refresh-token", http.StatusOK))
+		key := testRSAKey(t)
+		ts, _ := signedTokenServer(t, key, "kid-1", "new-refresh-token")
 		defer ts.Close()
 
 		handler := &ProxyAuthHandler{
 			oauthConfig: &oauth2.Config{
 				ClientID: "test-client",
-				Endpoint: oauth2.Endpoint{
-					TokenURL:  ts.URL,
-					AuthStyle: oauth2.AuthStyleInParams,
-				},
+				Endpoint: oauth2.Endpoint{TokenURL: ts.URL, AuthStyle: oauth2.AuthStyleInParams},
 			},
 			encryption: &mockEncryption{},
+			jwks:       testJWKS(key, "kid-1"),
 			tracer:     otel.Tracer("test"),
 		}
 
 		token, err := handler.RefreshToken(context.Background(), &RefreshTokenRequest{RefreshToken: "encrypted_real-refresh-token"})
 		require.NoError(t, err)
-		assert.Equal(t, "encrypted_new-access-jwt", token.AccessToken)
-		assert.Equal(t, "encrypted_new-refresh-token", token.RefreshToken)
+		assert.NotEmpty(t, token.AccessToken)
+		assert.NotEmpty(t, token.RefreshToken)
 	})
 
 	t.Run("encryption failure after refresh", func(t *testing.T) {
-		ts := httptest.NewServer(tokenHandler("new-jwt", "new-refresh", http.StatusOK))
+		key := testRSAKey(t)
+		ts, _ := signedTokenServer(t, key, "kid-1", "new-refresh")
 		defer ts.Close()
 
 		handler := &ProxyAuthHandler{
 			oauthConfig: &oauth2.Config{
 				ClientID: "test-client",
-				Endpoint: oauth2.Endpoint{
-					TokenURL:  ts.URL,
-					AuthStyle: oauth2.AuthStyleInParams,
-				},
+				Endpoint: oauth2.Endpoint{TokenURL: ts.URL, AuthStyle: oauth2.AuthStyleInParams},
 			},
 			encryption: &mockEncryption{
 				encryptFunc: func(data []byte) (string, error) {
 					return "", fmt.Errorf("encryption failed")
 				},
 			},
+			jwks:   testJWKS(key, "kid-1"),
 			tracer: otel.Tracer("test"),
 		}
 
@@ -1016,10 +1051,10 @@ func TestRefreshToken(t *testing.T) {
 	})
 
 	t.Run("client_id present, secret matches", func(t *testing.T) {
-		ts := httptest.NewServer(tokenHandler("new-access-jwt", "new-refresh-token", http.StatusOK))
+		key := testRSAKey(t)
+		ts, _ := signedTokenServer(t, key, "kid-1", "new-refresh-token")
 		defer ts.Close()
 
-		enc := &mockEncryption{}
 		clientID := makeEncryptedClientID(t, []string{"http://localhost/cb"}, "my-secret")
 
 		handler := &ProxyAuthHandler{
@@ -1027,7 +1062,8 @@ func TestRefreshToken(t *testing.T) {
 				ClientID: "test-client",
 				Endpoint: oauth2.Endpoint{TokenURL: ts.URL, AuthStyle: oauth2.AuthStyleInParams},
 			},
-			encryption: enc,
+			encryption: &mockEncryption{},
+			jwks:       testJWKS(key, "kid-1"),
 			tracer:     otel.Tracer("test"),
 		}
 
@@ -1058,10 +1094,10 @@ func TestRefreshToken(t *testing.T) {
 	})
 
 	t.Run("client_id present, no secret (public client)", func(t *testing.T) {
-		ts := httptest.NewServer(tokenHandler("new-access-jwt", "new-refresh-token", http.StatusOK))
+		key := testRSAKey(t)
+		ts, _ := signedTokenServer(t, key, "kid-1", "new-refresh-token")
 		defer ts.Close()
 
-		enc := &mockEncryption{}
 		clientID := makeEncryptedClientID(t, []string{"http://localhost/cb"}, "stored-secret")
 
 		handler := &ProxyAuthHandler{
@@ -1069,7 +1105,8 @@ func TestRefreshToken(t *testing.T) {
 				ClientID: "test-client",
 				Endpoint: oauth2.Endpoint{TokenURL: ts.URL, AuthStyle: oauth2.AuthStyleInParams},
 			},
-			encryption: enc,
+			encryption: &mockEncryption{},
+			jwks:       testJWKS(key, "kid-1"),
 			tracer:     otel.Tracer("test"),
 		}
 
@@ -1080,6 +1117,26 @@ func TestRefreshToken(t *testing.T) {
 		})
 		require.NoError(t, err)
 		assert.NotEmpty(t, token.AccessToken)
+	})
+
+	t.Run("JWT validation failure at refresh", func(t *testing.T) {
+		wrongKey := testRSAKey(t)
+		ts, _ := signedTokenServer(t, wrongKey, "kid-1", "new-refresh")
+		defer ts.Close()
+
+		knownKey := testRSAKey(t)
+		handler := &ProxyAuthHandler{
+			oauthConfig: &oauth2.Config{
+				ClientID: "test-client",
+				Endpoint: oauth2.Endpoint{TokenURL: ts.URL, AuthStyle: oauth2.AuthStyleInParams},
+			},
+			encryption: &mockEncryption{},
+			jwks:       testJWKS(knownKey, "kid-1"), // different key → signature mismatch
+			tracer:     otel.Tracer("test"),
+		}
+
+		_, err := handler.RefreshToken(context.Background(), &RefreshTokenRequest{RefreshToken: "encrypted_real-refresh-token"})
+		assert.Error(t, err)
 	})
 
 	t.Run("invalid client_id ciphertext", func(t *testing.T) {

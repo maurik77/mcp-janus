@@ -446,6 +446,15 @@ func (h *ProxyAuthHandler) RetrieveAccessToken(ctx context.Context, req *AccessT
 		return result, nil
 	}
 
+	// Validate JWT signature at issuance — the only point where JWKS is checked.
+	// Per-request middleware relies on AEAD integrity and skips this call.
+	if _, err := h.ValidateJWT(ctx, token.AccessToken); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "IdP JWT validation failed at issuance")
+		utility.Logger.Warn().Err(err).Str("client_id", req.ClientID).Msg("RetrieveAccessToken: IdP JWT validation failed")
+		return nil, fmt.Errorf("invalid_request")
+	}
+
 	opaqueToken, err := h.encryptTokenPair(token)
 	if err != nil {
 		span.RecordError(err)
@@ -548,6 +557,14 @@ func (h *ProxyAuthHandler) RefreshToken(ctx context.Context, req *RefreshTokenRe
 
 	if token.RefreshToken == "" {
 		token.RefreshToken = refreshTokenValue
+	}
+
+	// Validate JWT signature at refresh — same boundary check as issuance.
+	if _, err := h.ValidateJWT(ctx, token.AccessToken); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "IdP JWT validation failed at refresh")
+		utility.Logger.Warn().Err(err).Msg("RefreshToken: IdP JWT validation failed")
+		return nil, fmt.Errorf("invalid_request")
 	}
 
 	opaqueToken, err := h.encryptTokenPair(token)
