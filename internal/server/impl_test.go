@@ -7,7 +7,6 @@ import (
 	"mcpproxy/internal/service/auth"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"testing"
 	"time"
 
@@ -15,7 +14,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/oauth2"
 )
 
 // --- Mocks ---
@@ -44,40 +42,6 @@ func (m *mockMetadataService) WWWAuthenticateHeader() string {
 	return args.String(0)
 }
 
-type mockAuthService struct {
-	mock.Mock
-}
-
-func (m *mockAuthService) RegisterClient(ctx context.Context, req *auth.RegisterRequest) (*auth.RegisterResponse, error) {
-	args := m.Called(ctx, req)
-	return args.Get(0).(*auth.RegisterResponse), args.Error(1)
-}
-
-func (m *mockAuthService) ValidateJWT(ctx context.Context, tokenString string) (*jwt.Token, error) {
-	args := m.Called(ctx, tokenString)
-	return args.Get(0).(*jwt.Token), args.Error(1)
-}
-
-func (m *mockAuthService) AuthenticateRequest(ctx context.Context, req *auth.AuthenticateRequest) (string, error) {
-	args := m.Called(ctx, req)
-	return args.String(0), args.Error(1)
-}
-
-func (m *mockAuthService) ManageAuthorizationCode(ctx context.Context, req *auth.AuthorizationCodeData) (*auth.AuthorizationCodeData, *url.URL, error) {
-	args := m.Called(ctx, req)
-	return args.Get(0).(*auth.AuthorizationCodeData), args.Get(1).(*url.URL), args.Error(2)
-}
-
-func (m *mockAuthService) RetrieveAccessToken(ctx context.Context, req *auth.AccessTokenRequest) (*oauth2.Token, error) {
-	args := m.Called(ctx, req)
-	return args.Get(0).(*oauth2.Token), args.Error(1)
-}
-
-func (m *mockAuthService) RefreshToken(ctx context.Context, req *auth.RefreshTokenRequest) (*oauth2.Token, error) {
-	args := m.Called(ctx, req)
-	return args.Get(0).(*oauth2.Token), args.Error(1)
-}
-
 type mockEncryption struct {
 	mock.Mock
 }
@@ -92,6 +56,28 @@ func (m *mockEncryption) Decrypt(encrypted string) ([]byte, error) {
 	return args.Get(0).([]byte), args.Error(1)
 }
 
+// makeProxyJWT creates a valid JWT (alg=none) for use in proxy-mode tests.
+func makeProxyJWT(t *testing.T, claims jwt.MapClaims) string {
+	t.Helper()
+	tok := jwt.NewWithClaims(jwt.SigningMethodNone, claims)
+	signed, err := tok.SignedString(jwt.UnsafeAllowNoneSignatureType)
+	require.NoError(t, err)
+	return signed
+}
+
+func makeSelfIssuedBlob(t *testing.T, expiresAt int64, claims map[string]string) []byte {
+	t.Helper()
+	si := auth.SelfIssuedTokenData{
+		Type:      "si",
+		IssuedAt:  time.Now().Add(-time.Hour).Unix(),
+		ExpiresAt: expiresAt,
+		Claims:    claims,
+	}
+	b, err := json.Marshal(si)
+	require.NoError(t, err)
+	return b
+}
+
 // --- NewProxy Tests ---
 
 func TestNewProxy(t *testing.T) {
@@ -101,7 +87,7 @@ func TestNewProxy(t *testing.T) {
 				BaseURL: "http://localhost:8081",
 			},
 		}
-		p, err := NewProxy(cfg, nil, nil, nil)
+		p, err := NewProxy(cfg, nil, nil)
 		require.NoError(t, err)
 		assert.NotNil(t, p)
 	})
@@ -113,7 +99,7 @@ func TestNewProxy(t *testing.T) {
 				PathPrefix: "/api/v1",
 			},
 		}
-		p, err := NewProxy(cfg, nil, nil, nil)
+		p, err := NewProxy(cfg, nil, nil)
 		require.NoError(t, err)
 		assert.NotNil(t, p)
 	})
@@ -124,7 +110,7 @@ func TestNewProxy(t *testing.T) {
 				BaseURL: "",
 			},
 		}
-		p, err := NewProxy(cfg, nil, nil, nil)
+		p, err := NewProxy(cfg, nil, nil)
 		assert.Error(t, err)
 		assert.Nil(t, p)
 		assert.Contains(t, err.Error(), "must be an absolute URL")
@@ -136,7 +122,7 @@ func TestNewProxy(t *testing.T) {
 				BaseURL: "/just/a/path",
 			},
 		}
-		p, err := NewProxy(cfg, nil, nil, nil)
+		p, err := NewProxy(cfg, nil, nil)
 		assert.Error(t, err)
 		assert.Nil(t, p)
 		assert.Contains(t, err.Error(), "must be an absolute URL")
@@ -148,7 +134,7 @@ func TestNewProxy(t *testing.T) {
 				BaseURL: "localhost:8081",
 			},
 		}
-		p, err := NewProxy(cfg, nil, nil, nil)
+		p, err := NewProxy(cfg, nil, nil)
 		assert.Error(t, err)
 		assert.Nil(t, p)
 	})
@@ -193,7 +179,7 @@ func TestAuthMiddleware_MissingToken(t *testing.T) {
 	cfg := config.Config{
 		Upstream: config.Upstream{BaseURL: "http://localhost:8081"},
 	}
-	p, err := NewProxy(cfg, metaSvc, nil, nil)
+	p, err := NewProxy(cfg, metaSvc, nil)
 	require.NoError(t, err)
 
 	middleware := p.AuthMiddleware()
@@ -220,7 +206,7 @@ func TestAuthMiddleware_DecryptionFailure(t *testing.T) {
 	cfg := config.Config{
 		Upstream: config.Upstream{BaseURL: "http://localhost:8081"},
 	}
-	p, err := NewProxy(cfg, metaSvc, nil, enc)
+	p, err := NewProxy(cfg, metaSvc, enc)
 	require.NoError(t, err)
 
 	middleware := p.AuthMiddleware()
@@ -237,20 +223,17 @@ func TestAuthMiddleware_DecryptionFailure(t *testing.T) {
 	assert.Contains(t, rec.Body.String(), "invalid_token")
 }
 
-func TestAuthMiddleware_JWTValidationFailure(t *testing.T) {
+func TestAuthMiddleware_ProxyMode_InvalidJWT(t *testing.T) {
 	metaSvc := new(mockMetadataService)
 	metaSvc.On("WWWAuthenticateHeader").Return("Bearer")
 
 	enc := new(mockEncryption)
-	enc.On("Decrypt", "opaque-token").Return([]byte("invalid-jwt-string"), nil)
-
-	authSvc := new(mockAuthService)
-	authSvc.On("ValidateJWT", mock.Anything, "invalid-jwt-string").Return((*jwt.Token)(nil), assert.AnError)
+	enc.On("Decrypt", "opaque-token").Return([]byte("not-a-jwt"), nil)
 
 	cfg := config.Config{
 		Upstream: config.Upstream{BaseURL: "http://localhost:8081"},
 	}
-	p, err := NewProxy(cfg, metaSvc, authSvc, enc)
+	p, err := NewProxy(cfg, metaSvc, enc)
 	require.NoError(t, err)
 
 	middleware := p.AuthMiddleware()
@@ -267,30 +250,26 @@ func TestAuthMiddleware_JWTValidationFailure(t *testing.T) {
 	assert.Contains(t, rec.Body.String(), "invalid_token")
 }
 
-func TestAuthMiddleware_ClaimsNotMapClaims(t *testing.T) {
+func TestAuthMiddleware_ProxyMode_ExpiredJWT(t *testing.T) {
 	metaSvc := new(mockMetadataService)
 	metaSvc.On("WWWAuthenticateHeader").Return("Bearer")
 
 	enc := new(mockEncryption)
-	enc.On("Decrypt", "opaque-token").Return([]byte("real-jwt"), nil)
-
-	// Return a valid token but with non-MapClaims
-	token := &jwt.Token{
-		Valid:  true,
-		Claims: &jwt.RegisteredClaims{Subject: "user1"},
-	}
-	authSvc := new(mockAuthService)
-	authSvc.On("ValidateJWT", mock.Anything, "real-jwt").Return(token, nil)
+	expiredJWT := makeProxyJWT(t, jwt.MapClaims{
+		"sub": "user-123",
+		"exp": jwt.NewNumericDate(time.Now().Add(-time.Hour)),
+	})
+	enc.On("Decrypt", "opaque-token").Return([]byte(expiredJWT), nil)
 
 	cfg := config.Config{
 		Upstream: config.Upstream{BaseURL: "http://localhost:8081"},
 	}
-	p, err := NewProxy(cfg, metaSvc, authSvc, enc)
+	p, err := NewProxy(cfg, metaSvc, enc)
 	require.NoError(t, err)
 
 	middleware := p.AuthMiddleware()
 	handler := middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Error("next handler should not be called when claims are not MapClaims")
+		t.Error("next handler should not be called for expired JWT")
 	}))
 
 	req := httptest.NewRequest("GET", "/mcp/test", nil)
@@ -299,24 +278,20 @@ func TestAuthMiddleware_ClaimsNotMapClaims(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	assert.Contains(t, rec.Body.String(), "invalid_token")
 }
 
 func TestAuthMiddleware_Success(t *testing.T) {
 	metaSvc := new(mockMetadataService)
 
 	enc := new(mockEncryption)
-	enc.On("Decrypt", "opaque-token").Return([]byte("real-jwt"), nil)
-
-	token := &jwt.Token{
-		Valid: true,
-		Claims: jwt.MapClaims{
-			"sub":   "user-123",
-			"email": "user@example.com",
-			"count": float64(42), // non-string claim — should be skipped
-		},
-	}
-	authSvc := new(mockAuthService)
-	authSvc.On("ValidateJWT", mock.Anything, "real-jwt").Return(token, nil)
+	validJWT := makeProxyJWT(t, jwt.MapClaims{
+		"sub":   "user-123",
+		"email": "user@example.com",
+		"count": float64(42), // non-string claim — should be skipped
+		"exp":   jwt.NewNumericDate(time.Now().Add(time.Hour)),
+	})
+	enc.On("Decrypt", "opaque-token").Return([]byte(validJWT), nil)
 
 	cfg := config.Config{
 		Upstream: config.Upstream{BaseURL: "http://localhost:8081"},
@@ -328,7 +303,7 @@ func TestAuthMiddleware_Success(t *testing.T) {
 			},
 		},
 	}
-	p, err := NewProxy(cfg, metaSvc, authSvc, enc)
+	p, err := NewProxy(cfg, metaSvc, enc)
 	require.NoError(t, err)
 
 	var capturedRequest *http.Request
@@ -353,22 +328,9 @@ func TestAuthMiddleware_Success(t *testing.T) {
 	// Non-string claim should be skipped (not panic)
 	assert.Empty(t, capturedRequest.Header.Get("X-Count"))
 
-	// Real token should be in context
+	// Opaque token forwarded upstream
 	realToken := capturedRequest.Context().Value(keyRealToken)
 	assert.Equal(t, "opaque-token", realToken)
-}
-
-func makeSelfIssuedBlob(t *testing.T, expiresAt int64, claims map[string]string) []byte {
-	t.Helper()
-	si := auth.SelfIssuedTokenData{
-		Type:      "si",
-		IssuedAt:  time.Now().Add(-time.Hour).Unix(),
-		ExpiresAt: expiresAt,
-		Claims:    claims,
-	}
-	b, err := json.Marshal(si)
-	require.NoError(t, err)
-	return b
 }
 
 func TestAuthMiddleware_SelfIssuedToken_Valid(t *testing.T) {
@@ -385,7 +347,7 @@ func TestAuthMiddleware_SelfIssuedToken_Valid(t *testing.T) {
 			FixedHeaders: map[string]string{"X-Tenant": "test-tenant"},
 		},
 	}
-	p, err := NewProxy(cfg, metaSvc, nil, enc)
+	p, err := NewProxy(cfg, metaSvc, enc)
 	require.NoError(t, err)
 
 	var capturedReq *http.Request
@@ -419,7 +381,7 @@ func TestAuthMiddleware_SelfIssuedToken_Expired(t *testing.T) {
 	cfg := config.Config{
 		Upstream: config.Upstream{BaseURL: "http://localhost:8081"},
 	}
-	p, err := NewProxy(cfg, metaSvc, nil, enc)
+	p, err := NewProxy(cfg, metaSvc, enc)
 	require.NoError(t, err)
 
 	middleware := p.AuthMiddleware()
@@ -441,22 +403,19 @@ func TestAuthMiddleware_SelfIssuedToken_WrongDiscriminator_FallsBackToJWT(t *tes
 	metaSvc.On("WWWAuthenticateHeader").Return("Bearer")
 	enc := new(mockEncryption)
 
-	// JSON with wrong type discriminator — falls through to JWT validation path
+	// JSON with wrong type discriminator — falls through to JWT parse path, which fails
 	wrongBlob, _ := json.Marshal(map[string]any{"t": "other", "exp": 9999999999, "iat": 1000, "cl": map[string]string{}})
 	enc.On("Decrypt", "wrong-type-token").Return(wrongBlob, nil)
-
-	authSvc := new(mockAuthService)
-	authSvc.On("ValidateJWT", mock.Anything, string(wrongBlob)).Return((*jwt.Token)(nil), assert.AnError)
 
 	cfg := config.Config{
 		Upstream: config.Upstream{BaseURL: "http://localhost:8081"},
 	}
-	p, err := NewProxy(cfg, metaSvc, authSvc, enc)
+	p, err := NewProxy(cfg, metaSvc, enc)
 	require.NoError(t, err)
 
 	middleware := p.AuthMiddleware()
 	handler := middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Error("next handler must not be called when JWT validation fails")
+		t.Error("next handler must not be called when JWT parse fails")
 	}))
 
 	req := httptest.NewRequest("GET", "/mcp/test", nil)
@@ -475,7 +434,7 @@ func TestAuthMiddleware_InvalidBearerFormat(t *testing.T) {
 	cfg := config.Config{
 		Upstream: config.Upstream{BaseURL: "http://localhost:8081"},
 	}
-	p, err := NewProxy(cfg, metaSvc, nil, nil)
+	p, err := NewProxy(cfg, metaSvc, nil)
 	require.NoError(t, err)
 
 	middleware := p.AuthMiddleware()
@@ -505,7 +464,7 @@ func TestProxyHandler_ForwardsRequest(t *testing.T) {
 	cfg := config.Config{
 		Upstream: config.Upstream{BaseURL: upstream.URL, Name: "test-upstream"},
 	}
-	p, err := NewProxy(cfg, nil, nil, nil)
+	p, err := NewProxy(cfg, nil, nil)
 	require.NoError(t, err)
 
 	req := httptest.NewRequest("GET", "/mcp/ping", nil)
@@ -529,7 +488,7 @@ func TestProxyHandler_ForwardsRealToken(t *testing.T) {
 	cfg := config.Config{
 		Upstream: config.Upstream{BaseURL: upstream.URL},
 	}
-	p, err := NewProxy(cfg, nil, nil, nil)
+	p, err := NewProxy(cfg, nil, nil)
 	require.NoError(t, err)
 
 	req := httptest.NewRequest("GET", "/mcp/tool", nil)
@@ -553,7 +512,7 @@ func TestProxyHandler_ModifyResponse_StripsServerHeader(t *testing.T) {
 	cfg := config.Config{
 		Upstream: config.Upstream{BaseURL: upstream.URL},
 	}
-	p, err := NewProxy(cfg, nil, nil, nil)
+	p, err := NewProxy(cfg, nil, nil)
 	require.NoError(t, err)
 
 	req := httptest.NewRequest("GET", "/mcp/tool", nil)
@@ -578,7 +537,7 @@ func TestNewProxy_WithPathPrefix(t *testing.T) {
 			PathPrefix: "/v2",
 		},
 	}
-	p, err := NewProxy(cfg, nil, nil, nil)
+	p, err := NewProxy(cfg, nil, nil)
 	require.NoError(t, err)
 
 	req := httptest.NewRequest("GET", "/mcp/tool", nil)

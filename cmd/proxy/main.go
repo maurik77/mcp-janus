@@ -61,7 +61,7 @@ func main() {
 		utility.Logger.Fatal().Err(err).Msg("Failed to initialize metadata handler")
 	}
 
-	proxy, err := server.NewProxy(*cfg, metadataService, authService, encryption)
+	proxy, err := server.NewProxy(*cfg, metadataService, encryption)
 	if err != nil {
 		utility.Logger.Fatal().Err(err).Msg("Failed to initialize proxy")
 	}

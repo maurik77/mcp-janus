@@ -24,7 +24,6 @@ import (
 type proxy struct {
 	cfg          config.Config
 	metadata     metadata.Service
-	auth         auth.Service
 	encryption   utility.Encryption
 	tracer       trace.Tracer
 	targetURL    *url.URL
@@ -42,7 +41,6 @@ const (
 // and forwards the authenticated request to the configured upstream MCP server.
 func NewProxy(cfg config.Config,
 	metadata metadata.Service,
-	auth auth.Service,
 	encryption utility.Encryption) (Proxy, error) {
 	targetURL, err := url.Parse(cfg.Upstream.BaseURL)
 	if err != nil {
@@ -84,7 +82,6 @@ func NewProxy(cfg config.Config,
 	return &proxy{
 		cfg:          cfg,
 		metadata:     metadata,
-		auth:         auth,
 		encryption:   encryption,
 		tracer:       otel.Tracer("mcp-proxy.server"),
 		targetURL:    targetURL,
@@ -93,16 +90,15 @@ func NewProxy(cfg config.Config,
 }
 
 // AuthMiddleware returns an http.Handler middleware that decrypts the opaque
-// bearer token, validates the IdP JWT (or self-issued token) contained within,
-// injects mapped claims as request headers, and calls the next handler.
-// Requests with a missing or invalid token receive 401 Unauthorized.
+// bearer token, checks expiry, injects mapped claims as request headers, and
+// calls the next handler. Requests with a missing or invalid token get 401.
 func (p *proxy) AuthMiddleware() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ctx, span := p.tracer.Start(r.Context(), "proxy.AuthMiddleware")
 			defer span.End()
 
-			token, ok := extractBearerToken(r)
+			opaqueToken, ok := extractBearerToken(r)
 			if !ok {
 				utility.Logger.Warn().Str("remote_addr", r.RemoteAddr).Msg("AuthMiddleware: missing or invalid bearer token")
 				span.SetStatus(codes.Error, "Missing or invalid bearer token")
@@ -113,7 +109,7 @@ func (p *proxy) AuthMiddleware() func(http.Handler) http.Handler {
 
 			span.AddEvent("Token extracted")
 
-			data, err := p.encryption.Decrypt(token)
+			data, err := p.encryption.Decrypt(opaqueToken)
 			if err != nil {
 				utility.Logger.Warn().Err(err).Str("remote_addr", r.RemoteAddr).Msg("AuthMiddleware: token decryption failed")
 				span.RecordError(err)
@@ -124,72 +120,74 @@ func (p *proxy) AuthMiddleware() func(http.Handler) http.Handler {
 
 			span.AddEvent("Token decrypted")
 
-			// Detect self-issued token by discriminator field "t":"si"
-			var si auth.SelfIssuedTokenData
-			if jsonErr := json.Unmarshal(data, &si); jsonErr == nil && si.Type == "si" {
-				if time.Now().Unix() > si.ExpiresAt {
-					utility.Logger.Warn().Str("remote_addr", r.RemoteAddr).Msg("AuthMiddleware: self-issued token expired")
-					span.SetStatus(codes.Error, "Self-issued token expired")
-					http.Error(w, `{"error":"invalid_token"}`, http.StatusUnauthorized)
-					return
-				}
-				for header, value := range si.Claims {
-					r.Header.Set(header, value)
-				}
-				for header, value := range p.cfg.IDP.FixedHeaders {
-					r.Header.Set(header, value)
-				}
-				ctx = context.WithValue(ctx, keyRealToken, token)
-				span.AddEvent("Self-issued token validated")
-				span.SetStatus(codes.Ok, "Authentication successful")
-				next.ServeHTTP(w, r.WithContext(ctx))
-				return
-			}
-
-			jwtToken, err := p.auth.ValidateJWT(ctx, string(data))
-			if err != nil || !jwtToken.Valid {
-				utility.Logger.Warn().Err(err).Str("remote_addr", r.RemoteAddr).Msg("AuthMiddleware: JWT validation failed")
-				if err != nil {
-					span.RecordError(err)
-				}
-				span.SetStatus(codes.Error, "JWT validation failed")
+			mappedHeaders, upstreamToken, sub, resolveErr := p.resolveToken(data, opaqueToken)
+			if resolveErr != nil {
+				utility.Logger.Warn().Err(resolveErr).Str("remote_addr", r.RemoteAddr).Msg("AuthMiddleware: token validation failed")
+				span.RecordError(resolveErr)
+				span.SetStatus(codes.Error, "Token validation failed")
 				http.Error(w, `{"error":"invalid_token"}`, http.StatusUnauthorized)
 				return
 			}
 
-			span.AddEvent("JWT validated")
-
-			claims, ok := jwtToken.Claims.(jwt.MapClaims)
-			if !ok {
-				utility.Logger.Warn().Str("remote_addr", r.RemoteAddr).Msg("AuthMiddleware: failed to parse JWT claims")
-				span.SetStatus(codes.Error, "Failed to parse claims")
-				http.Error(w, `{"error":"invalid_token"}`, http.StatusUnauthorized)
-				return
-			}
-
-			if sub, ok := claims["sub"].(string); ok {
+			if sub != "" {
 				span.SetAttributes(attribute.String("user.id", sub))
 				utility.Logger.Info().Str("sub", sub).Str("remote_addr", r.RemoteAddr).Msg("AuthMiddleware: authentication successful")
 			}
 
-			ctx = context.WithValue(ctx, keyRealToken, token)
-
-			for source, dest := range p.cfg.IDP.ClaimsMapping {
-				if value, exists := claims[source]; exists {
-					if strValue, ok := value.(string); ok {
-						r.Header.Set(dest, strValue)
-					}
-				}
+			for header, value := range mappedHeaders {
+				r.Header.Set(header, value)
 			}
-
 			for header, value := range p.cfg.IDP.FixedHeaders {
 				r.Header.Set(header, value)
 			}
 
+			ctx = context.WithValue(ctx, keyRealToken, upstreamToken)
 			span.SetStatus(codes.Ok, "Authentication successful")
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+// resolveToken inspects the decrypted token payload and returns the mapped
+// headers to inject, the token to forward upstream, and the subject for logging.
+// AEAD decryption already guarantees content integrity; JWT signature re-validation
+// is therefore omitted — only expiry is checked at runtime.
+func (p *proxy) resolveToken(data []byte, opaqueToken string) (headers map[string]string, upstreamToken string, subject string, err error) {
+	// Self-issued: claims are pre-mapped and stored in the encrypted blob.
+	var si auth.SelfIssuedTokenData
+	if jsonErr := json.Unmarshal(data, &si); jsonErr == nil && si.Type == "si" {
+		if time.Now().Unix() > si.ExpiresAt {
+			return nil, "", "", fmt.Errorf("self-issued token expired")
+		}
+		return si.Claims, opaqueToken, "", nil
+	}
+
+	// Proxy mode: data is the raw IdP JWT. Skip signature verification —
+	// AEAD already proves the JWT was written by Janus at issuance and is unmodified.
+	jwtToken, _, parseErr := new(jwt.Parser).ParseUnverified(string(data), jwt.MapClaims{})
+	if parseErr != nil {
+		return nil, "", "", fmt.Errorf("invalid IdP JWT: %w", parseErr)
+	}
+	claims, ok := jwtToken.Claims.(jwt.MapClaims)
+	if !ok {
+		return nil, "", "", fmt.Errorf("invalid JWT claims type")
+	}
+	exp, expErr := claims.GetExpirationTime()
+	if expErr != nil || exp == nil || exp.Before(time.Now()) {
+		return nil, "", "", fmt.Errorf("IdP JWT expired or missing exp")
+	}
+
+	sub, _ := claims.GetSubject()
+
+	mapped := make(map[string]string)
+	for source, dest := range p.cfg.IDP.ClaimsMapping {
+		if val, exists := claims[source]; exists {
+			if strVal, ok := val.(string); ok {
+				mapped[dest] = strVal
+			}
+		}
+	}
+	return mapped, opaqueToken, sub, nil
 }
 
 // ProxyHandler attaches tracing attributes and delegates to the reverse proxy.

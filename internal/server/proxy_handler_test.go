@@ -25,7 +25,7 @@ func TestProxyHandler_ForwardsRequestToUpstream(t *testing.T) {
 
 	p, err := NewProxy(config.Config{
 		Upstream: config.Upstream{BaseURL: upstream.URL},
-	}, nil, nil, nil)
+	}, nil, nil)
 	require.NoError(t, err)
 
 	req := httptest.NewRequest("GET", "/mcp/resource", nil)
@@ -47,7 +47,7 @@ func TestProxyHandler_RewritesAuthorizationHeaderFromContext(t *testing.T) {
 
 	p, err := NewProxy(config.Config{
 		Upstream: config.Upstream{BaseURL: upstream.URL},
-	}, nil, nil, nil)
+	}, nil, nil)
 	require.NoError(t, err)
 
 	req := httptest.NewRequest("GET", "/mcp/", nil)
@@ -71,7 +71,7 @@ func TestProxyHandler_NoContextTokenKeepsOriginalHeader(t *testing.T) {
 
 	p, err := NewProxy(config.Config{
 		Upstream: config.Upstream{BaseURL: upstream.URL},
-	}, nil, nil, nil)
+	}, nil, nil)
 	require.NoError(t, err)
 
 	req := httptest.NewRequest("GET", "/mcp/", nil)
@@ -106,7 +106,7 @@ func TestProxyHandler_PassesThroughUpstreamStatusCodes(t *testing.T) {
 
 			p, err := NewProxy(config.Config{
 				Upstream: config.Upstream{BaseURL: upstream.URL},
-			}, nil, nil, nil)
+			}, nil, nil)
 			require.NoError(t, err)
 
 			req := httptest.NewRequest("GET", "/mcp/test", nil)
@@ -128,7 +128,7 @@ func TestProxyHandler_ForwardsPOSTBody(t *testing.T) {
 
 	p, err := NewProxy(config.Config{
 		Upstream: config.Upstream{BaseURL: upstream.URL},
-	}, nil, nil, nil)
+	}, nil, nil)
 	require.NoError(t, err)
 
 	body := strings.NewReader(`{"jsonrpc":"2.0","method":"tools/list"}`)
@@ -151,7 +151,7 @@ func TestProxyHandler_ServerHeaderStripped(t *testing.T) {
 
 	p, err := NewProxy(config.Config{
 		Upstream: config.Upstream{BaseURL: upstream.URL},
-	}, nil, nil, nil)
+	}, nil, nil)
 	require.NoError(t, err)
 
 	req := httptest.NewRequest("GET", "/mcp/", nil)
