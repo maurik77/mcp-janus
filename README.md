@@ -172,7 +172,7 @@ Some MCP clients (Claude, ChatGPT) complete the OAuth flow once and never call `
 | --- | --- | --- |
 | Token lifetime | IdP-controlled (e.g. 1 h) | Janus-controlled (e.g. 720 h) |
 | IdP revocation effective within | ~1 h | up to `token_max_ttl` |
-| JWKS call per request | no (AEAD guarantees integrity) | no |
+
 | Claims freshness | refreshed at IdP token renewal | frozen until `token_max_ttl` |
 | Clients without refresh support | session expires hourly | full `token_ttl` duration |
 
