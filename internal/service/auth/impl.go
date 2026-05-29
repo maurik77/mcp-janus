@@ -219,39 +219,10 @@ func (h *ProxyAuthHandler) AuthenticateRequest(ctx context.Context, req *Authent
 	)
 
 	portInsensitive := h.config.Proxy.CIMDLocalhostPortInsensitive
-	if isURLClientID(req.ClientID) {
-		doc, err := h.cimdFetcher(req.ClientID, h.httpClient, h.cimdCache)
-		if err != nil {
-			span.RecordError(err)
-			span.SetStatus(codes.Error, "Failed to fetch client metadata document")
-			utility.Logger.Warn().Err(err).Str("client_id", req.ClientID).Msg("AuthenticateRequest: CIMD fetch failed")
-			return "", fmt.Errorf("invalid_client")
-		}
-		if !redirectURIMatchesRegistered(req.RedirectURI, doc.RedirectURIs, portInsensitive) {
-			span.SetStatus(codes.Error, "Invalid redirect URI")
-			utility.Logger.Warn().Str("client_id", req.ClientID).Str("redirect_uri", req.RedirectURI).Msg("AuthenticateRequest: redirect_uri not in CIMD document")
-			return "", fmt.Errorf("invalid_request")
-		}
-	} else {
-		clientData, err := DecodeClientID(req.ClientID, h.encryption)
-		if err != nil {
-			span.RecordError(err)
-			span.SetStatus(codes.Error, "Failed to decode client ID")
-			utility.Logger.Warn().Err(err).Str("client_id", req.ClientID).Msg("AuthenticateRequest: failed to decode client_id")
-			return "", fmt.Errorf("invalid_request")
-		}
-		utility.Logger.Debug().
-			Strs("registered_redirect_uris", clientData.RedirectURIs).
-			Str("requested_redirect_uri", req.RedirectURI).
-			Msg("[DEBUG] AuthenticateRequest: decoded client data")
-		if !slices.Contains(clientData.RedirectURIs, req.RedirectURI) {
-			span.SetStatus(codes.Error, "Invalid redirect URI")
-			utility.Logger.Warn().
-				Str("client_id", req.ClientID).
-				Str("redirect_uri", req.RedirectURI).
-				Msg("AuthenticateRequest: redirect_uri not registered for client")
-			return "", fmt.Errorf("invalid_request")
-		}
+	if err := h.assertRedirectURI(req.ClientID, req.RedirectURI, portInsensitive); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "Redirect URI validation failed")
+		return "", err
 	}
 
 	stateData := StateData{
@@ -315,33 +286,9 @@ func (h *ProxyAuthHandler) ManageAuthorizationCode(ctx context.Context, req *Aut
 	portInsensitive := h.config.Proxy.CIMDLocalhostPortInsensitive
 
 	// Validate redirect URI against registered client or CIMD document
-	if isURLClientID(stateData.ClientID) {
-		doc, err := h.cimdFetcher(stateData.ClientID, h.httpClient, h.cimdCache)
-		if err != nil {
-			utility.Logger.Warn().Err(err).Str("client_id", stateData.ClientID).Msg("ManageAuthorizationCode: CIMD fetch failed")
-			return nil, nil, fmt.Errorf("invalid_request")
-		}
-		if !redirectURIMatchesRegistered(stateData.RedirectURI, doc.RedirectURIs, portInsensitive) {
-			utility.Logger.Warn().Str("client_id", stateData.ClientID).Str("redirect_uri", stateData.RedirectURI).Msg("ManageAuthorizationCode: redirect_uri not in CIMD document")
-			return nil, nil, fmt.Errorf("invalid_request")
-		}
-	} else {
-		clientData, err := DecodeClientID(stateData.ClientID, h.encryption)
-		if err != nil {
-			utility.Logger.Warn().Err(err).Str("client_id", stateData.ClientID).Msg("ManageAuthorizationCode: failed to decode client_id")
-			return nil, nil, fmt.Errorf("invalid_request")
-		}
-		utility.Logger.Debug().
-			Strs("registered_redirect_uris", clientData.RedirectURIs).
-			Str("state_redirect_uri", stateData.RedirectURI).
-			Msg("[DEBUG] ManageAuthorizationCode: decoded client data")
-		if !slices.Contains(clientData.RedirectURIs, stateData.RedirectURI) {
-			utility.Logger.Warn().
-				Str("client_id", stateData.ClientID).
-				Str("redirect_uri", stateData.RedirectURI).
-				Msg("ManageAuthorizationCode: redirect_uri not registered for client")
-			return nil, nil, fmt.Errorf("invalid_request")
-		}
+	if err := h.assertRedirectURI(stateData.ClientID, stateData.RedirectURI, portInsensitive); err != nil {
+		utility.Logger.Warn().Err(err).Str("client_id", stateData.ClientID).Msg("ManageAuthorizationCode: redirect_uri validation failed")
+		return nil, nil, fmt.Errorf("invalid_request")
 	}
 
 	// Validate redirect URI is a well-formed absolute URL with http(s) scheme
@@ -607,6 +554,37 @@ func generateClientID(req *RegisterRequest, encryption utility.Encryption) (stri
 		Msg("[DEBUG] generateClientID: encrypted client_id")
 
 	return encryptedClientID, clientSecret, err
+}
+
+// assertRedirectURI validates that redirectURI is registered for clientID.
+// Supports both CIMD URL client IDs and opaque encrypted client IDs.
+func (h *ProxyAuthHandler) assertRedirectURI(clientID, redirectURI string, portInsensitive bool) error {
+	if isURLClientID(clientID) {
+		doc, err := h.cimdFetcher(clientID, h.httpClient, h.cimdCache)
+		if err != nil {
+			utility.Logger.Warn().Err(err).Str("client_id", clientID).Msg("assertRedirectURI: CIMD fetch failed")
+			return fmt.Errorf("invalid_client")
+		}
+		if !redirectURIMatchesRegistered(redirectURI, doc.RedirectURIs, portInsensitive) {
+			utility.Logger.Warn().Str("client_id", clientID).Str("redirect_uri", redirectURI).Msg("assertRedirectURI: redirect_uri not in CIMD document")
+			return fmt.Errorf("invalid_request")
+		}
+		return nil
+	}
+	clientData, err := DecodeClientID(clientID, h.encryption)
+	if err != nil {
+		utility.Logger.Warn().Err(err).Str("client_id", clientID).Msg("assertRedirectURI: failed to decode client_id")
+		return fmt.Errorf("invalid_request")
+	}
+	utility.Logger.Debug().
+		Strs("registered_redirect_uris", clientData.RedirectURIs).
+		Str("redirect_uri", redirectURI).
+		Msg("[DEBUG] assertRedirectURI: decoded client data")
+	if !slices.Contains(clientData.RedirectURIs, redirectURI) {
+		utility.Logger.Warn().Str("client_id", clientID).Str("redirect_uri", redirectURI).Msg("assertRedirectURI: redirect_uri not registered for client")
+		return fmt.Errorf("invalid_request")
+	}
+	return nil
 }
 
 // validateClientAuth authenticates the client at the token endpoint.
