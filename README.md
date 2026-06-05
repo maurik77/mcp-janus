@@ -36,9 +36,10 @@ sequenceDiagram
     participant P as MCP Janus Proxy
     participant U as Upstream MCP Server
 
-    C->>P: Authorization: Bearer &lt;opaque&gt;
+    C->>P: Authorization: Bearer opaque_token
     Note over P: 1. Decrypt opaque token (AES-GCM)<br/>2. Check expiry (AEAD proves integrity)<br/>3. Map claims → HTTP headers
-    P->>U: Authorization: Bearer &lt;opaque&gt;<br/>X-Sub: user123
+    P->>U: Authorization: Bearer opaque_token
+    Note over P,U: X-Sub: user123 (mapped claim header)
     U-->>P: 200 OK + MCP response
     P-->>C: 200 OK + MCP response
 ```

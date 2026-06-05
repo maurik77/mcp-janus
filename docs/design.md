@@ -104,9 +104,9 @@ sequenceDiagram
     Note over P: Generate opaque token with rtid
     P-->>C: 15. Opaque token
 
-    C->>P: 16. GET /mcp (Authorization: Bearer &lt;opaque&gt;)
-    Note over P: Decrypt opaque token → get rtid<br/>Retrieve upstream creds
-    P->>MCP: 17. GET /mcp (Authorization: Bearer &lt;upstream&gt;)
+    C->>P: 16. GET /mcp (Authorization: Bearer opaque_token)
+    Note over P: Decrypt opaque token, get rtid<br/>Retrieve upstream creds
+    P->>MCP: 17. GET /mcp (Authorization: Bearer upstream_token)
     MCP-->>P: 18. MCP Response
     P-->>C: 19. MCP Response
 ```
