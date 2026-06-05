@@ -30,21 +30,17 @@ Janus sits in front of any MCP server and runs the complete OAuth 2.1 + PKCE flo
 
 **The client never sees, decodes, or replays the real token. Zero token passthrough. Full MCP spec compliance.**
 
-```text
-MCP Client                        MCP Janus Proxy                    Upstream MCP Server
-    │                                    │                                    │
-    │  Authorization: Bearer <opaque>    │                                    │
-    │ ──────────────────────────────────>│                                    │
-    │                                    │ 1. Decrypt opaque token (AES-GCM)  │
-    │                                    │ 2. Validate JWT (exp, aud, iss)    │
-    │                                    │ 3. Map claims → HTTP headers       │
-    │                                    │                                    │
-    │                                    │  Authorization: Bearer <real JWT>  │
-    │                                    │  X-Sub: user123                    │
-    │                                    │ ──────────────────────────────────>│
-    │                                    │                                    │
-    │                                    │◄──────────────────────────────────│
-    │◄──────────────────────────────────│                                    │
+```mermaid
+sequenceDiagram
+    participant C as MCP Client
+    participant P as MCP Janus Proxy
+    participant U as Upstream MCP Server
+
+    C->>P: Authorization: Bearer &lt;opaque&gt;
+    Note over P: 1. Decrypt opaque token (AES-GCM)<br/>2. Check expiry (AEAD proves integrity)<br/>3. Map claims → HTTP headers
+    P->>U: Authorization: Bearer &lt;opaque&gt;<br/>X-Sub: user123
+    U-->>P: 200 OK + MCP response
+    P-->>C: 200 OK + MCP response
 ```
 
 ## Who Is This For?

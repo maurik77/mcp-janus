@@ -523,6 +523,169 @@ func TestProxyHandler_ModifyResponse_StripsServerHeader(t *testing.T) {
 	assert.Empty(t, rec.Header().Get("Server"), "Server header should be stripped by ModifyResponse")
 }
 
+// --- Backward-compatibility tests: develop-issued TokenBehaviorProxy tokens ---
+//
+// develop issues opaque tokens as: AES-256-GCM_encrypt(raw_idp_jwt_bytes)
+// where raw_idp_jwt is a fully signed JWT (e.g. HS256/RS256) from the IdP.
+//
+// The current branch's resolveToken calls ParseUnverified instead of re-validating
+// the signature via JWKS on every request. These tests confirm that a token issued
+// by develop is accepted (or rejected for expiry) by the current branch.
+
+func makeSignedJWT(t *testing.T, claims jwt.MapClaims) string {
+	t.Helper()
+	tok := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	raw, err := tok.SignedString([]byte("idp-secret"))
+	require.NoError(t, err)
+	return raw
+}
+
+func TestResolveToken_ProxyMode_DevelopTokenCompat(t *testing.T) {
+	tests := []struct {
+		name        string
+		claims      jwt.MapClaims
+		claimsMap   map[string]string
+		wantSub     string
+		wantHeaders map[string]string
+		wantErr     bool
+	}{
+		{
+			name: "valid develop token maps claims",
+			claims: jwt.MapClaims{
+				"sub":   "alice",
+				"email": "alice@example.com",
+				"exp":   jwt.NewNumericDate(time.Now().Add(time.Hour)),
+			},
+			claimsMap:   map[string]string{"sub": "X-Sub", "email": "X-Email"},
+			wantSub:     "alice",
+			wantHeaders: map[string]string{"X-Sub": "alice", "X-Email": "alice@example.com"},
+		},
+		{
+			name: "valid develop token without sub",
+			claims: jwt.MapClaims{
+				"email": "anon@example.com",
+				"exp":   jwt.NewNumericDate(time.Now().Add(time.Hour)),
+			},
+			claimsMap:   map[string]string{"email": "X-Email"},
+			wantSub:     "",
+			wantHeaders: map[string]string{"X-Email": "anon@example.com"},
+		},
+		{
+			name: "expired develop token is rejected",
+			claims: jwt.MapClaims{
+				"sub": "alice",
+				"exp": jwt.NewNumericDate(time.Now().Add(-time.Minute)),
+			},
+			wantErr: true,
+		},
+		{
+			name: "develop token without exp is rejected",
+			claims: jwt.MapClaims{
+				"sub": "alice",
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rawJWT := makeSignedJWT(t, tt.claims)
+
+			cfg := config.Config{
+				Upstream: config.Upstream{BaseURL: "http://localhost:8081"},
+				IDP:      config.IDP{ClaimsMapping: tt.claimsMap},
+			}
+			p, err := NewProxy(cfg, nil, nil)
+			require.NoError(t, err)
+			pp := p.(*proxy)
+
+			headers, upstreamTok, sub, err := pp.resolveToken([]byte(rawJWT), "opaque-blob")
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			// Upstream always receives the original opaque token, not the raw JWT.
+			assert.Equal(t, "opaque-blob", upstreamTok)
+			assert.Equal(t, tt.wantSub, sub)
+			for k, v := range tt.wantHeaders {
+				assert.Equal(t, v, headers[k], "header %s", k)
+			}
+		})
+	}
+}
+
+func TestAuthMiddleware_ProxyMode_DevelopTokenCompat_Valid(t *testing.T) {
+	// Simulates a token issued by the develop branch and consumed by the current branch.
+	// develop: opaque = encrypt(signed_idp_jwt); current branch: ParseUnverified + expiry.
+	rawJWT := makeSignedJWT(t, jwt.MapClaims{
+		"sub":   "user-develop",
+		"email": "dev@example.com",
+		"exp":   jwt.NewNumericDate(time.Now().Add(time.Hour)),
+	})
+
+	enc := new(mockEncryption)
+	enc.On("Decrypt", "develop-opaque-token").Return([]byte(rawJWT), nil)
+
+	cfg := config.Config{
+		Upstream: config.Upstream{BaseURL: "http://localhost:8081"},
+		IDP: config.IDP{
+			ClaimsMapping: map[string]string{
+				"sub":   "X-User-Sub",
+				"email": "X-User-Email",
+			},
+		},
+	}
+	p, err := NewProxy(cfg, nil, enc)
+	require.NoError(t, err)
+
+	var capturedReq *http.Request
+	handler := p.AuthMiddleware()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedReq = r
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest("GET", "/mcp/tool", nil)
+	req.Header.Set("Authorization", "Bearer develop-opaque-token")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code, "develop-issued token must be accepted")
+	require.NotNil(t, capturedReq)
+	assert.Equal(t, "user-develop", capturedReq.Header.Get("X-User-Sub"))
+	assert.Equal(t, "dev@example.com", capturedReq.Header.Get("X-User-Email"))
+	assert.Equal(t, "develop-opaque-token", capturedReq.Context().Value(keyRealToken))
+}
+
+func TestAuthMiddleware_ProxyMode_DevelopTokenCompat_Expired(t *testing.T) {
+	// An expired develop-issued token must be rejected even without JWKS re-validation.
+	rawJWT := makeSignedJWT(t, jwt.MapClaims{
+		"sub": "user-develop",
+		"exp": jwt.NewNumericDate(time.Now().Add(-time.Minute)),
+	})
+
+	enc := new(mockEncryption)
+	enc.On("Decrypt", "expired-develop-token").Return([]byte(rawJWT), nil)
+
+	cfg := config.Config{
+		Upstream: config.Upstream{BaseURL: "http://localhost:8081"},
+	}
+	p, err := NewProxy(cfg, nil, enc)
+	require.NoError(t, err)
+
+	handler := p.AuthMiddleware()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("next handler must not be called for expired develop token")
+	}))
+
+	req := httptest.NewRequest("GET", "/mcp/tool", nil)
+	req.Header.Set("Authorization", "Bearer expired-develop-token")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	assert.Contains(t, rec.Body.String(), "invalid_token")
+}
+
 func TestNewProxy_WithPathPrefix(t *testing.T) {
 	var receivedPath string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
