@@ -26,25 +26,22 @@ Le conseguenze di sicurezza sono concrete:
 
 ## Cosa Fa Janus
 
-Janus si posiziona davanti a qualsiasi server MCP ed esegue il flusso completo OAuth 2.1 + PKCE per conto dei client. Dopo lo scambio del codice di autorizzazione con il vero IdP, **cripta il JWT dell'IdP con AES-256-GCM** e consegna al client un blob opaco. Ad ogni richiesta successiva decripta, valida e inoltra il JWT reale upstream — in modo trasparente.
+Janus si posiziona davanti a qualsiasi server MCP ed esegue il flusso completo OAuth 2.1 + PKCE per conto dei client. Dopo lo scambio del codice di autorizzazione con il vero IdP, **cripta il JWT dell'IdP con AES-256-GCM** e consegna al client un blob opaco. Ad ogni richiesta successiva decripta il token opaco, verifica la scadenza e inoltra upstream — in modo trasparente. La crittografia AEAD garantisce l'integrità del contenuto, eliminando la necessità di chiamate JWKS per ogni richiesta.
 
 **Il client non vede, decodifica o replica mai il token reale. Zero token passthrough. Piena conformità alla specifica MCP.**
 
-```text
-MCP Client                        MCP Janus Proxy                    Upstream MCP Server
-    │                                    │                                    │
-    │  Authorization: Bearer <opaque>    │                                    │
-    │ ──────────────────────────────────>│                                    │
-    │                                    │ 1. Decripta token opaco (AES-GCM)  │
-    │                                    │ 2. Valida JWT (exp, aud, iss)      │
-    │                                    │ 3. Mappa claims → header HTTP      │
-    │                                    │                                    │
-    │                                    │  Authorization: Bearer <real JWT>  │
-    │                                    │  X-Sub: user123                    │
-    │                                    │ ──────────────────────────────────>│
-    │                                    │                                    │
-    │                                    │◄──────────────────────────────────│
-    │◄──────────────────────────────────│                                    │
+```mermaid
+sequenceDiagram
+    participant C as MCP Client
+    participant P as MCP Janus Proxy
+    participant U as Upstream MCP Server
+
+    C->>P: Authorization: Bearer opaque_token
+    Note over P: 1. Decripta token opaco (AES-GCM)<br/>2. Verifica scadenza (l'AEAD garantisce l'integrita)<br/>3. Mappa claims → header HTTP
+    P->>U: Authorization: Bearer opaque_token
+    Note over P,U: X-Sub: user123 (header claim mappato)
+    U-->>P: 200 OK + risposta MCP
+    P-->>C: 200 OK + risposta MCP
 ```
 
 ## A Chi È Rivolto
@@ -62,7 +59,7 @@ MCP Client                        MCP Janus Proxy                    Upstream MC
 
 - **Token opachi crittografati** — AES-256-GCM (AEAD) avvolge ogni JWT dell'IdP; i client vedono solo testo cifrato
 - **Nessun token passthrough** — il proxy emette i propri token, non inoltra mai i token dei client
-- **Validazione JWT** — validazione completa dei claim (scadenza, audience, issuer) con JWKS e rotazione automatica delle chiavi
+- **Validazione JWT all'emissione** — validazione completa dei claim (scadenza, audience, issuer) con JWKS e rotazione automatica delle chiavi; l'integrità AEAD elimina le chiamate JWKS per ogni richiesta
 - **Mappatura claims-to-headers** — iniezione configurabile dei claim IdP negli header HTTP upstream
 - **Credenziali client crittografate** — la registrazione dinamica restituisce `client_id` / `client_secret` crittografati con AEAD
 - **Modalità token self-issued** — Janus può emettere token propri a lunga durata per client MCP come Claude e ChatGPT che non supportano il refresh
@@ -154,7 +151,7 @@ curl http://localhost:8080/.well-known/oauth-protected-resource | jq .
 2. **Autorizzazione** — il client effettua il redirect a `GET /auth` con il `code_challenge` PKCE. Il proxy reindirizza al vero IdP.
 3. **Callback** — l'IdP reindirizza a `GET /callback`. Il proxy riceve il codice di autorizzazione.
 4. **Scambio token** — il client chiama `POST /token` con il `code_verifier`. Il proxy scambia con l'IdP, riceve il JWT reale, lo cripta con AES-256-GCM e restituisce un bearer opaco al client.
-5. **Richieste autenticate** — il client invia `Authorization: Bearer <opaque>` a `/mcp/*`. Il proxy decripta, valida il JWT, mappa i claim negli header e inoltra con il token reale.
+5. **Richieste autenticate** — il client invia `Authorization: Bearer <opaque>` a `/mcp/*`. Il proxy decripta il token opaco, verifica la scadenza (l'AEAD garantisce l'integrità del contenuto — nessuna chiamata JWKS), mappa i claim negli header e inoltra.
 6. **Refresh** — il client chiama `POST /refresh` con il refresh token crittografato. Il proxy decripta, effettua il refresh con l'IdP, ri-cripta e restituisce un nuovo bearer opaco.
 
 ### Modalità token self-issued (`token_behavior: self_issued`)
@@ -171,9 +168,9 @@ Alcuni client MCP (Claude, ChatGPT) completano il flusso OAuth una sola volta e 
 | | `proxy` | `self_issued` |
 |---|---|---|
 | Durata token | Controllata dall'IdP (es. 1 h) | Controllata da Janus (es. 720 h) |
-| Revoca IdP efficace entro | ~1 h | fino a `token_ttl` |
-| Chiamata JWKS per richiesta | sì (con cache) | no |
-| Freschezza dei claim | ad ogni richiesta | congelati al login |
+| Revoca IdP efficace entro | ~1 h | fino a `token_max_ttl` |
+
+| Freschezza dei claim | aggiornati al rinnovo del JWT IdP | congelati fino a `token_max_ttl` |
 | Client senza refresh | sessione scade ogni ora | durata intera di `token_ttl` |
 
 ### Crittografia dei token

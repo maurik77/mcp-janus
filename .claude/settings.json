@@ -1,0 +1,26 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "case \"$CLAUDE_TOOL_INPUT_file_path\" in *.go) goimports -w \"$CLAUDE_TOOL_INPUT_file_path\" 2>/dev/null; gofmt -w \"$CLAUDE_TOOL_INPUT_file_path\" 2>/dev/null;; esac"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "case \"$CLAUDE_TOOL_INPUT_file_path\" in *.env|*.pem|*.key) echo \"Blocked: editing secret file $CLAUDE_TOOL_INPUT_file_path\" >&2; exit 2;; esac"
+          }
+        ]
+      }
+    ]
+  }
+}
