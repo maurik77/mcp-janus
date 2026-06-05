@@ -30,21 +30,17 @@ Janus si posiziona davanti a qualsiasi server MCP ed esegue il flusso completo O
 
 **Il client non vede, decodifica o replica mai il token reale. Zero token passthrough. Piena conformità alla specifica MCP.**
 
-```text
-MCP Client                        MCP Janus Proxy                    Upstream MCP Server
-    │                                    │                                    │
-    │  Authorization: Bearer <opaque>    │                                    │
-    │ ──────────────────────────────────>│                                    │
-    │                                    │ 1. Decripta token opaco (AES-GCM)  │
-    │                                    │ 2. Valida JWT (exp, aud, iss)      │
-    │                                    │ 3. Mappa claims → header HTTP      │
-    │                                    │                                    │
-    │                                    │  Authorization: Bearer <real JWT>  │
-    │                                    │  X-Sub: user123                    │
-    │                                    │ ──────────────────────────────────>│
-    │                                    │                                    │
-    │                                    │◄──────────────────────────────────│
-    │◄──────────────────────────────────│                                    │
+```mermaid
+sequenceDiagram
+    participant C as MCP Client
+    participant P as MCP Janus Proxy
+    participant U as Upstream MCP Server
+
+    C->>P: Authorization: Bearer &lt;opaque&gt;
+    Note over P: 1. Decripta token opaco (AES-GCM)<br/>2. Verifica scadenza (l'AEAD garantisce l'integrità)<br/>3. Mappa claims → header HTTP
+    P->>U: Authorization: Bearer &lt;opaque&gt;<br/>X-Sub: user123
+    U-->>P: 200 OK + risposta MCP
+    P-->>C: 200 OK + risposta MCP
 ```
 
 ## A Chi È Rivolto
