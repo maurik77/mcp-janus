@@ -23,7 +23,7 @@ services:
       - "8888:8888"
     command: start-dev --http-port=8888
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8888/health/ready || exit 1"]
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8888/realms/master || exit 1"]
       interval: 15s
       timeout: 10s
       retries: 12
