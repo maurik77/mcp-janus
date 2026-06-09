@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Weather</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'SF Pro Display', sans-serif;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: #0f0f1a;
+  padding: 16px;
+}
+
+.bg {
+  position: fixed;
+  inset: 0;
+  transition: background 1.2s ease;
+  z-index: 0;
+}
+
+.bg::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse at 30% 20%, rgba(255,255,255,0.06) 0%, transparent 60%),
+              radial-gradient(ellipse at 70% 80%, rgba(0,0,0,0.4) 0%, transparent 60%);
+}
+
+.card {
+  position: relative;
+  z-index: 1;
+  background: rgba(255, 255, 255, 0.10);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 28px;
+  padding: 36px 44px 32px;
+  min-width: 340px;
+  max-width: 420px;
+  color: white;
+  text-align: center;
+  box-shadow:
+    0 24px 64px rgba(0, 0, 0, 0.5),
+    0 1px 0 rgba(255, 255, 255, 0.15) inset;
+  opacity: 0;
+  transform: translateY(24px) scale(0.97);
+  transition: opacity 0.6s cubic-bezier(0.22, 1, 0.36, 1),
+              transform 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.card.visible {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+.greeting {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  opacity: 0.55;
+  margin-bottom: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.greeting-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.5);
+  display: inline-block;
+}
+
+.location {
+  font-size: 32px;
+  font-weight: 700;
+  letter-spacing: -0.8px;
+  margin-bottom: 4px;
+  text-shadow: 0 2px 12px rgba(0,0,0,0.3);
+}
+
+.date {
+  font-size: 13px;
+  opacity: 0.5;
+  margin-bottom: 28px;
+  font-weight: 400;
+  letter-spacing: 0.3px;
+}
+
+.weather-icon-wrap {
+  position: relative;
+  display: inline-block;
+  margin-bottom: 12px;
+}
+
+.weather-icon {
+  font-size: 88px;
+  line-height: 1;
+  display: block;
+  animation: float 4s ease-in-out infinite;
+  filter: drop-shadow(0 8px 24px rgba(0,0,0,0.35));
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0px) rotate(0deg); }
+  33%       { transform: translateY(-10px) rotate(2deg); }
+  66%       { transform: translateY(-5px) rotate(-1deg); }
+}
+
+.condition {
+  font-size: 17px;
+  font-weight: 500;
+  opacity: 0.75;
+  margin-bottom: 8px;
+  letter-spacing: 0.3px;
+}
+
+.temperature {
+  font-size: 80px;
+  font-weight: 800;
+  letter-spacing: -4px;
+  line-height: 1;
+  margin-bottom: 28px;
+  text-shadow: 0 4px 20px rgba(0,0,0,0.25);
+}
+
+.temperature sup {
+  font-size: 30px;
+  font-weight: 300;
+  letter-spacing: 0;
+  vertical-align: super;
+  opacity: 0.85;
+  margin-left: 2px;
+}
+
+.divider {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.18), transparent);
+  margin-bottom: 22px;
+}
+
+.details {
+  display: flex;
+  justify-content: center;
+  gap: 0;
+}
+
+.detail-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  flex: 1;
+  padding: 0 8px;
+}
+
+.detail-item + .detail-item {
+  border-left: 1px solid rgba(255,255,255,0.12);
+}
+
+.detail-icon { font-size: 22px; line-height: 1; }
+
+.detail-label {
+  font-size: 10px;
+  font-weight: 500;
+  opacity: 0.45;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.detail-value {
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.3px;
+}
+
+.loading-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 20px 0;
+}
+
+.spinner {
+  width: 32px;
+  height: 32px;
+  border: 2px solid rgba(255,255,255,0.15);
+  border-top-color: rgba(255,255,255,0.7);
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.loading-text {
+  font-size: 13px;
+  opacity: 0.45;
+  letter-spacing: 0.5px;
+}
+</style>
+</head>
+<body>
+<div class="bg" id="bg"></div>
+<div class="card" id="card">
+  <div class="loading-state">
+    <div class="spinner"></div>
+    <div class="loading-text">Loading weather…</div>
+  </div>
+</div>
+
+<script>
+const GRADIENTS = {
+  'Sunny':         'linear-gradient(150deg, #ff8c00 0%, #e63946 100%)',
+  'Partly Cloudy': 'linear-gradient(150deg, #2980b9 0%, #6c5ce7 100%)',
+  'Cloudy':        'linear-gradient(150deg, #4a5568 0%, #2d3748 100%)',
+  'Rainy':         'linear-gradient(150deg, #1e3a5f 0%, #0d2137 100%)',
+  'Stormy':        'linear-gradient(150deg, #1a1a2e 0%, #2d1b4e 100%)',
+  'Snowy':         'linear-gradient(150deg, #74b9ff 0%, #a29bfe 100%)',
+  'Foggy':         'linear-gradient(150deg, #576574 0%, #3d4045 100%)',
+  'Windy':         'linear-gradient(150deg, #00b894 0%, #0984e3 100%)',
+};
+
+const EMOJIS = {
+  'Sunny':         '☀️',
+  'Partly Cloudy': '🌤️',
+  'Cloudy':        '☁️',
+  'Rainy':         '🌧️',
+  'Stormy':        '⛈️',
+  'Snowy':         '❄️',
+  'Foggy':         '🌫️',
+  'Windy':         '💨',
+};
+
+function formatDate(dateStr) {
+  if (!dateStr) return '';
+  try {
+    return new Date(dateStr + 'T12:00:00').toLocaleDateString('en-US', {
+      weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
+    });
+  } catch (_) { return dateStr; }
+}
+
+function extractUser(helloMsg) {
+  if (!helloMsg || helloMsg.includes('unknown user')) return '';
+  // Match X-User-Full-Name or X_User_Full_Name patterns
+  const nameRe = /[Xx][-_][Uu]ser[-_][Ff]ull[-_][Nn]ame:\s*([^,)]+)/i;
+  const userRe = /[Xx][-_][Uu]ser[-_][Uu]sername:\s*([^,)\s]+)/i;
+  const nm = helloMsg.match(nameRe);
+  if (nm) return nm[1].trim();
+  const um = helloMsg.match(userRe);
+  if (um) return um[1].trim();
+  // Fallback: extract between Hello, ( and )!
+  const fb = helloMsg.match(/Hello, \((.+?)\)!/);
+  return fb ? fb[1] : '';
+}
+
+function render(data) {
+  const bg = document.getElementById('bg');
+  const card = document.getElementById('card');
+
+  const gradient = GRADIENTS[data.condition] || 'linear-gradient(150deg, #667eea 0%, #764ba2 100%)';
+  const emoji    = EMOJIS[data.condition] || '🌡️';
+  const user     = extractUser(data.hello_message);
+  const dateStr  = formatDate(data.date);
+  const city     = (data.city || '').charAt(0).toUpperCase() + (data.city || '').slice(1);
+
+  bg.style.background = gradient;
+
+  card.innerHTML = `
+    ${user ? `<div class="greeting"><span class="greeting-dot"></span>${user}<span class="greeting-dot"></span></div>` : ''}
+    <div class="location">${city}</div>
+    <div class="date">${dateStr}</div>
+    <div class="weather-icon-wrap">
+      <span class="weather-icon">${emoji}</span>
+    </div>
+    <div class="condition">${data.condition}</div>
+    <div class="temperature">${data.temperature}<sup>°C</sup></div>
+    <div class="divider"></div>
+    <div class="details">
+      <div class="detail-item">
+        <span class="detail-icon">💧</span>
+        <span class="detail-label">Humidity</span>
+        <span class="detail-value">${data.humidity}%</span>
+      </div>
+      <div class="detail-item">
+        <span class="detail-icon">💨</span>
+        <span class="detail-label">Wind</span>
+        <span class="detail-value">${data.wind_speed}<small style="font-size:11px;opacity:.6;font-weight:400"> km/h</small></span>
+      </div>
+    </div>
+  `;
+
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      card.classList.add('visible');
+      reportSize();
+    });
+  });
+}
+
+// ── MCP Apps postMessage protocol ────────────────────────────────────────────
+
+let nextId = 1;
+const pending = new Map();
+
+window.addEventListener('message', (event) => {
+  const msg = event.data;
+  if (!msg || typeof msg !== 'object') return;
+
+  // Response to a pending request
+  if (msg.id !== undefined && pending.has(msg.id)) {
+    const { resolve, reject } = pending.get(msg.id);
+    pending.delete(msg.id);
+    if (msg.result !== undefined) resolve(msg.result);
+    else if (msg.error) reject(new Error(msg.error.message || 'Unknown error'));
+    return;
+  }
+
+  // Tool result pushed by host after tool execution
+  if (msg.method === 'ui/notifications/tool-result') {
+    const content = msg.params?.content;
+    if (!Array.isArray(content)) return;
+    const textBlock = content.find(c => c.type === 'text');
+    if (!textBlock?.text) return;
+    try {
+      render(JSON.parse(textBlock.text));
+    } catch (e) {
+      console.error('[weather-app] Failed to parse tool result:', e);
+    }
+  }
+});
+
+function request(method, params) {
+  return new Promise((resolve, reject) => {
+    const id = nextId++;
+    pending.set(id, { resolve, reject });
+    window.parent.postMessage({ jsonrpc: '2.0', id, method, params }, '*');
+  });
+}
+
+function notify(method, params) {
+  window.parent.postMessage({ jsonrpc: '2.0', method, params }, '*');
+}
+
+// ── Auto-resize: report content height to host after render ──────────────────
+
+let _resizePending = false;
+let _lastW = 0, _lastH = 0;
+
+function reportSize() {
+  if (_resizePending) return;
+  _resizePending = true;
+  requestAnimationFrame(() => {
+    _resizePending = false;
+    const root = document.documentElement;
+    const prevH = root.style.height;
+    root.style.height = 'max-content';
+    const h = Math.ceil(root.getBoundingClientRect().height);
+    root.style.height = prevH;
+    const w = Math.ceil(window.innerWidth);
+    if (w !== _lastW || h !== _lastH) {
+      _lastW = w; _lastH = h;
+      notify('ui/notifications/size-changed', { width: w, height: h });
+    }
+  });
+}
+
+const _ro = new ResizeObserver(reportSize);
+_ro.observe(document.documentElement);
+_ro.observe(document.body);
+
+// ── init ─────────────────────────────────────────────────────────────────────
+
+async function init() {
+  try {
+    await request('ui/initialize', {
+      appInfo:         { name: 'weather-app', version: '1.0.0' },
+      appCapabilities: {},
+      protocolVersion: '2026-01-26',
+    });
+    notify('ui/notifications/initialized', {});
+    reportSize();
+  } catch (e) {
+    console.warn('[weather-app] ui/initialize failed (running outside host?):', e.message);
+  }
+}
+
+init();
+</script>
+</body>
+</html>

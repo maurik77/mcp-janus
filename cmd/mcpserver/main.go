@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"log"
 	"math/rand"
@@ -11,9 +12,12 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+//go:embed weather_app.html
+var weatherAppHTML string
+
 func main() {
 
-	runServer("localhost:8081")
+	runServer(":8081")
 
 }
 
@@ -43,16 +47,37 @@ func runServer(url string) {
 		Version: "1.0.0",
 	}, nil)
 
-	// Add the cityWeather tool.
+	const resourceURI = "ui://weather-server/app.html"
+
+	// Add the cityWeather tool with MCP Apps UI declaration.
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "cityWeather",
 		Description: "Get weather information for a specific city and date",
+		Meta: mcp.Meta{
+			"ui": map[string]any{
+				"resourceUri": resourceURI,
+			},
+		},
 	}, getWeather)
 
-	// Create the streamable HTTP handler.
+	// Serve the weather HTML app as a ui:// resource.
+	server.AddResource(&mcp.Resource{
+		URI:      resourceURI,
+		Name:     "weather-app",
+		MIMEType: "text/html;profile=mcp-app",
+	}, func(_ context.Context, _ *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
+		return &mcp.ReadResourceResult{
+			Contents: []*mcp.ResourceContents{
+				{URI: resourceURI, MIMEType: "text/html;profile=mcp-app", Text: weatherAppHTML},
+			},
+		}, nil
+	})
+
+	// Create the streamable HTTP handler (stateless: each POST is independent,
+	// no session ID tracking — avoids 404 on stale session IDs from proxies).
 	handler := mcp.NewStreamableHTTPHandler(func(req *http.Request) *mcp.Server {
 		return server
-	}, nil)
+	}, &mcp.StreamableHTTPOptions{Stateless: true})
 
 	handlerWithLogging := loggingHandler(handler)
 
@@ -74,9 +99,9 @@ func getWeather(ctx context.Context, req *mcp.CallToolRequest, params *GetWeathe
 
 	user := ""
 
-	// get all headers start with X_ or x_ and add to user string
+	// get all headers start with X- or X_ and add to user string
 	for key, values := range req.Extra.Header {
-		if len(values) > 0 && (key[:2] == "X_") {
+		if len(values) > 0 && len(key) >= 2 && (key[:2] == "X-" || key[:2] == "X_") {
 			if user != "" {
 				user += ", "
 			}

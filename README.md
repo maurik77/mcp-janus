@@ -44,6 +44,10 @@ sequenceDiagram
     P-->>C: 200 OK + MCP response
 ```
 
+<p align="center">
+  <img src="docs/assets/demo.gif" alt="MCP Janus demo — OAuth 2.1 login and interactive MCP App in Claude Desktop" width="800"/>
+</p>
+
 ## Who Is This For?
 
 - **Platform engineers** deploying MCP servers in production who need real security, not duct-tape auth
