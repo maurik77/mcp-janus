@@ -70,81 +70,45 @@
 
 ### 2.1 Authorization Code Flow (Client ↔ Proxy)
 
-```
-MCP Client         Proxy Server        Upstream AS        Upstream MCP
-    │                   │                    │                  │
-    │  1. GET /mcp      │                    │                  │
-    │ ──────────────>   │                    │                  │
-    │                   │                    │                  │
-    │  2. 401 + WWW-Authenticate             │                  │
-    │ <──────────────   │                    │                  │
-    │                   │                    │                  │
-    │  3. GET /.well-known/oauth-protected-resource             │
-    │ ──────────────>   │                    │                  │
-    │                   │                    │                  │
-    │  4. Resource Metadata                  │                  │
-    │ <──────────────   │                    │                  │
-    │                   │                    │                  │
-    │  5. POST /auth/authorize               │                  │
-    │     (code_challenge, state)            │                  │
-    │ ──────────────>   │                    │                  │
-    │                   │                    │                  │
-    │  6. 302 Redirect to user browser       │                  │
-    │ <──────────────   │                    │                  │
-    │                   │                    │                  │
-    │  [User authenticates with Proxy]       │                  │
-    │                   │                    │                  │
-    │  7. Proxy initiates upstream OAuth     │                  │
-    │                   │ ──────────────────>│                  │
-    │                   │  (PKCE, resource)  │                  │
-    │                   │                    │                  │
-    │                   │  8. Auth Code      │                  │
-    │                   │ <──────────────────│                  │
-    │                   │                    │                  │
-    │  9. 302 Redirect to /auth/callback     │                  │
-    │ <──────────────   │                    │                  │
-    │                   │                    │                  │
-    │  10. GET /auth/callback                │                  │
-    │      (code, state)│                    │                  │
-    │ ──────────────>   │                    │                  │
-    │                   │                    │                  │
-    │                   │ 11. POST /token    │                  │
-    │                   │     (code_verifier)│                  │
-    │                   │ ──────────────────>│                  │
-    │                   │                    │                  │
-    │                   │ 12. Upstream token │                  │
-    │                   │ <──────────────────│                  │
-    │                   │                    │                  │
-    │                   │ [Store: rtid → upstream creds]        │
-    │                   │                    │                  │
-    │  13. 302 with auth code                │                  │
-    │ <──────────────   │                    │                  │
-    │                   │                    │                  │
-    │  14. POST /token  │                    │                  │
-    │      (code, code_verifier)             │                  │
-    │ ──────────────>   │                    │                  │
-    │                   │                    │                  │
-    │                   │ [Generate opaque token with rtid]     │
-    │                   │                    │                  │
-    │  15. Opaque token │                    │                  │
-    │ <──────────────   │                    │                  │
-    │                   │                    │                  │
-    │  16. GET /mcp     │                    │                  │
-    │      (Authorization: Bearer <opaque>)  │                  │
-    │ ──────────────>   │                    │                  │
-    │                   │                    │                  │
-    │                   │ [Decrypt opaque token, get rtid]      │
-    │                   │ [Retrieve upstream creds]             │
-    │                   │                    │                  │
-    │                   │ 17. GET /mcp       │                  │
-    │                   │     (Authorization: Bearer <upstream>)│
-    │                   │ ───────────────────────────────────────>
-    │                   │                    │                  │
-    │                   │ 18. MCP Response   │                  │
-    │                   │ <───────────────────────────────────────
-    │                   │                    │                  │
-    │  19. MCP Response │                    │                  │
-    │ <──────────────   │                    │                  │
+```mermaid
+sequenceDiagram
+    participant C as MCP Client
+    participant P as Proxy Server
+    participant AS as Upstream AS
+    participant MCP as Upstream MCP
+
+    C->>P: 1. GET /mcp
+    P-->>C: 2. 401 + WWW-Authenticate
+
+    C->>P: 3. GET /.well-known/oauth-protected-resource
+    P-->>C: 4. Resource Metadata
+
+    C->>P: 5. POST /auth/authorize (code_challenge, state)
+    P-->>C: 6. 302 Redirect to user browser
+
+    Note over C,P: User authenticates with Proxy
+
+    P->>AS: 7. Initiate upstream OAuth (PKCE, resource)
+    AS-->>P: 8. Auth Code
+
+    P-->>C: 9. 302 Redirect to /auth/callback
+
+    C->>P: 10. GET /auth/callback (code, state)
+    P->>AS: 11. POST /token (code_verifier)
+    AS-->>P: 12. Upstream token
+    Note over P: Store: rtid → upstream creds
+
+    P-->>C: 13. 302 with auth code
+
+    C->>P: 14. POST /token (code, code_verifier)
+    Note over P: Generate opaque token with rtid
+    P-->>C: 15. Opaque token
+
+    C->>P: 16. GET /mcp (Authorization: Bearer opaque_token)
+    Note over P: Decrypt opaque token, get rtid<br/>Retrieve upstream creds
+    P->>MCP: 17. GET /mcp (Authorization: Bearer upstream_token)
+    MCP-->>P: 18. MCP Response
+    P-->>C: 19. MCP Response
 ```
 
 ### 2.2 Opaque Token Structure

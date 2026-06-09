@@ -45,7 +45,7 @@ require_cmd jq
 section "Waiting for Keycloak at $KC_BASE"
 MAX_TRIES=30
 for i in $(seq 1 "$MAX_TRIES"); do
-  if curl -sf "$KC_BASE/health/ready" >/dev/null 2>&1; then
+  if curl -sf "$KC_BASE/realms/master" >/dev/null 2>&1; then
     info "Keycloak is ready (attempt $i/$MAX_TRIES)"
     break
   fi
