@@ -424,10 +424,10 @@ Steps performed: `docker build` → tag + push to registry → update `deploymen
 
 ## Roadmap
 
-- [ ] **MCP 2026-07-28 final spec alignment** — authorization hardening SEPs (`application_type` on registration, issuer-bound credentials) as the spec finalizes
-- [ ] **Standard refresh grant** — `grant_type=refresh_token` on the `/token` endpoint alongside the current `/refresh`
-- [ ] **Token revocation & key versioning** — RFC 7009 endpoint and rotating master keys without invalidating every outstanding token
-- [ ] **CI pipeline** — build, test, lint, `gosec`, and `govulncheck` on every pull request
+- [ ] [**MCP 2026-07-28 final spec alignment**](https://github.com/maurik77/mcp-janus/issues/16) — authorization hardening SEPs (`application_type` on registration, issuer-bound credentials) as the spec finalizes
+- [ ] [**Standard refresh grant**](https://github.com/maurik77/mcp-janus/issues/17) — `grant_type=refresh_token` on the `/token` endpoint alongside the current `/refresh`
+- [ ] [**Token revocation & key versioning**](https://github.com/maurik77/mcp-janus/issues/18) — RFC 7009 endpoint and rotating master keys without invalidating every outstanding token
+- [ ] [**CI pipeline**](https://github.com/maurik77/mcp-janus/issues/19) — build, test, lint, `gosec`, and `govulncheck` on every pull request
 
 Have a use case that isn't covered? [Open an issue](https://github.com/maurik77/mcp-janus/issues) — design discussions are welcome.
 

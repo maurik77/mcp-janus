@@ -424,10 +424,10 @@ Passi eseguiti: `docker build` → tag + push al registry → aggiornamento `dep
 
 ## Roadmap
 
-- [ ] **Allineamento alla spec MCP 2026-07-28 finale** — SEP di hardening dell'autorizzazione (`application_type` in registrazione, credenziali legate all'issuer) man mano che la spec si finalizza
-- [ ] **Refresh grant standard** — `grant_type=refresh_token` sull'endpoint `/token` accanto all'attuale `/refresh`
-- [ ] **Revoca token e versioning delle chiavi** — endpoint RFC 7009 e rotazione della master key senza invalidare tutti i token in circolazione
-- [ ] **Pipeline CI** — build, test, lint, `gosec` e `govulncheck` su ogni pull request
+- [ ] [**Allineamento alla spec MCP 2026-07-28 finale**](https://github.com/maurik77/mcp-janus/issues/16) — SEP di hardening dell'autorizzazione (`application_type` in registrazione, credenziali legate all'issuer) man mano che la spec si finalizza
+- [ ] [**Refresh grant standard**](https://github.com/maurik77/mcp-janus/issues/17) — `grant_type=refresh_token` sull'endpoint `/token` accanto all'attuale `/refresh`
+- [ ] [**Revoca token e versioning delle chiavi**](https://github.com/maurik77/mcp-janus/issues/18) — endpoint RFC 7009 e rotazione della master key senza invalidare tutti i token in circolazione
+- [ ] [**Pipeline CI**](https://github.com/maurik77/mcp-janus/issues/19) — build, test, lint, `gosec` e `govulncheck` su ogni pull request
 
 Hai un caso d'uso non coperto? [Apri una issue](https://github.com/maurik77/mcp-janus/issues) — le discussioni di design sono benvenute.
 
